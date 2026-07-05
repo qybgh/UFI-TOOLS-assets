@@ -1,3 +1,0 @@
-version=0.9.21
-traffic=https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/traffic_v0.9.18
-diag=https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag

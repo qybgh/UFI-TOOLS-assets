@@ -1,5 +1,5 @@
 {
-    "version": "0.9.19",
-    "traffic": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/traffic_v1.0",
-    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.0"
+    "version": "0.9.20",
+    "traffic": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/traffic_v0.9.20",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v0.9.20"
 }

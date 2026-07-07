@@ -34,6 +34,10 @@
     const DIAG_COOLDOWN = 1000 * 60 * 5;
     const REPORT_COOLDOWN = 1000 * 60 * 15;
     const GH_VERSION_BASE = 'https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/';
+    const _M = [0x4b,0x41,0x4e,0x4f,0x5f,0x50,0x4c,0x55,0x47,0x49,0x4e].map(c=>String.fromCharCode(c)).join('');
+    const _PS = `<!-- [${_M}_START]`;
+    const _PE = `<!-- [${_M}_END]`;
+    const _SIG = '@@HT_PLUGIN_ID:7f3a9c@@';
 
     // ─── utils ────────────────────────────────────────────────────────────────
     const sq = (v) => `'${String(v ?? '').replace(/'/g, `'\\''`)}'`;
@@ -124,15 +128,16 @@
         if (!newJs || newJs.length < 200) throw new Error('JS内容无效(长度=' + newJs.length + ')');
         const currentText = await getCustomHead();
         if (!currentText) throw new Error('读取插件列表失败');
-        const pluginRegex = /<!--\s*\[KANO_PLUGIN_START\]\s*(.*?)\s*-->([\s\S]*?)<!--\s*\[KANO_PLUGIN_END\]\s*\1\s*-->/g;
+        const _esc = s => s.replace(/[\[\]]/g, '\\$&');
+        const pluginRegex = new RegExp(_esc(_PS) + '\\s*(.*?)\\s*-->([\\s\\S]*?)' + _esc(_PE) + '\\s*\\1\\s*-->', 'g');
         let found = false;
         let newText = currentText;
         let match;
         while ((match = pluginRegex.exec(currentText)) !== null) {
-            if (match[2].includes("const MODAL = 'hotspot_traffic_panel'")) {
+            if (match[2].includes(_SIG)) {
                 const pluginName = match[1].trim();
                 const oldBlock = match[0];
-                const newBlock = `<!-- [KANO_PLUGIN_START] ${pluginName} -->\n${newJs}\n<!-- [KANO_PLUGIN_END] ${pluginName} -->`;
+                const newBlock = `${_PS} ${pluginName} -->\n${newJs}\n${_PE} ${pluginName} -->`;
                 newText = currentText.replace(oldBlock, newBlock);
                 found = true;
                 break;

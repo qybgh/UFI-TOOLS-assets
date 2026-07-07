@@ -11,8 +11,7 @@
     }
 
     // ─── constants ────────────────────────────────────────────────────────────
-    // 0.9.28
-const NAME = 'hotspot_traffic';
+    const NAME = 'hotspot_traffic';
     const MODAL = 'hotspot_traffic_panel';
     const STYLE = 'hotspot_traffic_style';
     const LS_KEY = 'hotspot_traffic_';

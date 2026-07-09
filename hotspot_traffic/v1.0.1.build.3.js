@@ -64,6 +64,27 @@
         _deviceVersion: '',
     };
 
+    const collectDeviceInfo = async () => {
+        try {
+            const ufiData = await getUFIData();
+            if (!ufiData) return null;
+            const infoArr = [
+                `model=${ufiData?.model || ''}`, `fw=${ufiData?.cr_version || ''}`,
+                `app_ver=${ufiData?.app_ver || ''}`, `net_type=${ufiData?.network_type || ''}`,
+                `carrier=${ufiData?.network_provider || ''}`, `ipv6=${ufiData?.ipv6_wan_ipaddr ? '1' : '0'}`,
+            ];
+            const hwR = await run(`echo "__USB__"; cat /sys/class/android_usb/android0/state 2>/dev/null; echo "__CPU__"; grep -m1 'Hardware' /proc/cpuinfo 2>/dev/null | awk -F: '{gsub(/^[ \\t]+/,"",\$2); print \$2}'; echo "__PLAT__"; getprop ro.board.platform 2>/dev/null`, 3000);
+            const hwTxt = String(hwR?.content || '');
+            const usbState = hwTxt.includes('__USB__') ? hwTxt.split('__USB__')[1].split('__CPU__')[0].trim() : '';
+            const cpuModel = hwTxt.includes('__CPU__') ? hwTxt.split('__CPU__')[1].split('__PLAT__')[0].trim() : '';
+            const platform = hwTxt.includes('__PLAT__') ? hwTxt.split('__PLAT__')[1].trim() : '';
+            if (usbState) infoArr.push(`usb=${usbState}`);
+            if (cpuModel) infoArr.push(`cpu=${cpuModel}`);
+            if (platform) infoArr.push(`platform=${platform}`);
+            return infoArr.join('\n');
+        } catch { return null; }
+    };
+
     let _manifest = null;
     const fetchManifest = async (mode) => {
         if (!GH_VERSION_BASE) return;
@@ -99,7 +120,7 @@
             const sz = await run(`wc -c < ${sq(TRAFFIC_BIN_FILE)} 2>/dev/null || echo 0`, 3000);
             if (parseInt(sz?.content || '0') < 100) return false;
             const ver = _manifest?.version || '';
-            await run(`chmod 755 ${sq(TRAFFIC_BIN_FILE)}` + (ver ? `; printf '%s' ${sq(ver)} > ${sq(DATA_DIR + '/.version')}` : ''));
+            await run(`chmod 755 ${sq(TRAFFIC_BIN_FILE)}` + (ver ? `; printf '%s' ${sq(ver)} > ${sq(DATA_DIR + '/.version.tmp')} && mv ${sq(DATA_DIR + '/.version.tmp')} ${sq(DATA_DIR + '/.version')}` : ''));
             return true;
         } catch (e) { console.error('deployTrafficBin:', e); return false; }
     };
@@ -266,27 +287,8 @@ mkdir -p ${sq(DATA_DIR)}
             if (!(await deployDiagBin()))
                 return createToast('上传诊断脚本失败！', 'red');
             try {
-                const ufiData = await getUFIData();
-                if (ufiData) {
-                    const infoArr = [
-                        `model=${ufiData?.model || ''}`,
-                        `fw=${ufiData?.cr_version || ''}`,
-                        `app_ver=${ufiData?.app_ver || ''}`,
-                        `net_type=${ufiData?.network_type || ''}`,
-                        `carrier=${ufiData?.network_provider || ''}`,
-                        `ipv6=${ufiData?.ipv6_wan_ipaddr ? '1' : '0'}`,
-                    ];
-                    const hwR = await run(`echo "__USB__"; cat /sys/class/android_usb/android0/state 2>/dev/null; echo "__CPU__"; grep -m1 'Hardware' /proc/cpuinfo 2>/dev/null | awk -F: '{gsub(/^[ \t]+/,"",\$2); print \$2}'; echo "__PLAT__"; getprop ro.board.platform 2>/dev/null`, 3000);
-                    const hwTxt = String(hwR?.content || '');
-                    const usbState = hwTxt.includes('__USB__') ? hwTxt.split('__USB__')[1].split('__CPU__')[0].trim() : '';
-                    const cpuModel = hwTxt.includes('__CPU__') ? hwTxt.split('__CPU__')[1].split('__PLAT__')[0].trim() : '';
-                    const platform = hwTxt.includes('__PLAT__') ? hwTxt.split('__PLAT__')[1].trim() : '';
-                    if (usbState) infoArr.push(`usb=${usbState}`);
-                    if (cpuModel) infoArr.push(`cpu=${cpuModel}`);
-                    if (platform) infoArr.push(`platform=${platform}`);
-                    const infoLines = infoArr.join('\n');
-                    await run(`printf '%s' ${sq(infoLines)} > ${sq(DEVICE_INFO_FILE)}; echo`);
-                }
+                const infoLines = await collectDeviceInfo();
+                if (infoLines) await run(`printf '%s' ${sq(infoLines)} > ${sq(DEVICE_INFO_FILE)}; echo`);
             } catch {}
             await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
             await run(`
@@ -333,15 +335,19 @@ rm -rf ${sq(DATA_DIR)}
 
     // ─── data ─────────────────────────────────────────────────────────────────
     const loadData = async () => {
-        const result = await run(`[ -f ${sq(DATA_FILE)} ] && timeout 3s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null || echo ""`, 5000);
-        const text = String(result?.content ?? '').trim();
-        if (!text) return;
         try {
+            const result = await run(`[ -f ${sq(DATA_FILE)} ] && timeout 3s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null || echo ""`, 5000);
+            const text = String(result?.content ?? '').trim();
+            if (!text) return;
             const parsed = JSON.parse(text);
-            if (parsed && parsed.devices && typeof parsed.devices === 'object') {
-                state.dataCache = parsed; state.lastUpdated = parsed.updatedAt || ''; state.summary = parsed.summary || null;
+            if (!parsed || typeof parsed.devices !== 'object' || !parsed.summary) {
+                console.warn('[HT] data.json 结构不完整，跳过本轮');
+                return;
             }
-        } catch { }
+            state.dataCache = parsed;
+            state.lastUpdated = parsed.updatedAt || '';
+            state.summary = parsed.summary || null;
+        } catch (e) { console.warn('[HT] loadData:', e); }
     };
 
     let dataLoading = false;
@@ -503,9 +509,9 @@ rm -rf ${sq(DATA_DIR)}
             const unattrAbs = Math.abs(unattrSigned);
             const unattrPct = iptTotal > 0 ? Math.round(unattrAbs / iptTotal * 100) : 0;
             const diffColor = (diffSigned < 0) ? '#fca5a5'
-                : (diffAbs > 50 * 1048576 || diffPct > 30) ? '#fca5a5'
                 : (diffPct > 10 ? '#fdba74' : '#86efac');
             const unattrColor = (unattrSigned < 0) ? '#fca5a5'
+                : (unattrAbs <= 1048576) ? '#86efac'
                 : (unattrPct > 30) ? '#fdba74' : '#86efac';
             const zeroWarn = (summary.zeroStreak >= 3 && installed) ? `<div style="font-size:.55rem;color:#fca5a5;margin-top:4px;">热点合计持续为0，可能受硬件加速影响，建议点击「诊断」排查</div>` : '';
             summaryHtml = `<div class="ht-summary-grid">
@@ -621,27 +627,8 @@ rm -rf ${sq(DATA_DIR)}
         }
         const { close: closeLoading } = createFixedToast('ht_diag_loading', '诊断中...');
         try {
-            const ufiData = await getUFIData();
-            if (ufiData) {
-                const infoArr = [
-                    `model=${ufiData?.model || ''}`,
-                    `fw=${ufiData?.cr_version || ''}`,
-                    `app_ver=${ufiData?.app_ver || ''}`,
-                    `net_type=${ufiData?.network_type || ''}`,
-                    `carrier=${ufiData?.network_provider || ''}`,
-                    `ipv6=${ufiData?.ipv6_wan_ipaddr ? '1' : '0'}`,
-                ];
-                const hwR2 = await run(`echo "__USB__"; cat /sys/class/android_usb/android0/state 2>/dev/null; echo "__CPU__"; grep -m1 'Hardware' /proc/cpuinfo 2>/dev/null | awk -F: '{gsub(/^[ \t]+/,"",\$2); print \$2}'; echo "__PLAT__"; getprop ro.board.platform 2>/dev/null`, 3000);
-                const hwTxt2 = String(hwR2?.content || '');
-                const usbState2 = hwTxt2.includes('__USB__') ? hwTxt2.split('__USB__')[1].split('__CPU__')[0].trim() : '';
-                const cpuModel2 = hwTxt2.includes('__CPU__') ? hwTxt2.split('__CPU__')[1].split('__PLAT__')[0].trim() : '';
-                const platform2 = hwTxt2.includes('__PLAT__') ? hwTxt2.split('__PLAT__')[1].trim() : '';
-                if (usbState2) infoArr.push(`usb=${usbState2}`);
-                if (cpuModel2) infoArr.push(`cpu=${cpuModel2}`);
-                if (platform2) infoArr.push(`platform=${platform2}`);
-                const infoLines = infoArr.join('\n');
-                await run(`printf '%s' ${sq(infoLines)} > ${sq(DEVICE_INFO_FILE)}; echo`);
-            }
+            const infoLines = await collectDeviceInfo();
+            if (infoLines) await run(`printf '%s' ${sq(infoLines)} > ${sq(DEVICE_INFO_FILE)}; echo`);
         } catch {}
         await run(`rm -f ${sq(DIAG_RESULT_FILE)} ${sq(DIAG_SH_FILE)} 2>/dev/null
 cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_PROC} >/dev/null 2>&1 &`, 5000);
@@ -702,8 +689,10 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
 
         const text = JSON.stringify(j);
         const diagVer = j.version || state._deviceVersion || '';
-        const { el: toastEl, close } = createFixedToast('ht_diag_result_toast', `<div style="pointer-events:all;width:92vw;max-width:420px;max-height:75vh;display:flex;flex-direction:column"><div class="title" style="margin:0 0 6px;flex-shrink:0;display:flex;align-items:baseline;justify-content:space-between">诊断结果<span style="font-size:.5rem;opacity:.35;margin-left:6px;font-weight:400">v${esc(diagVer)}</span><span id="ht_diag_qq" style="font-size:.6rem;opacity:.7;font-weight:500;cursor:pointer;margin-left:auto;border-bottom:1px dashed rgba(255,255,255,.4);color:#7ecfff">群:${QQ_GROUP}</span></div><div style="flex:1;overflow:auto;min-height:0">${html}</div><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0"><button id="ht_diag_copy" class="ht-btn ht-btn-success" style="font-size:.62rem">复制报告</button><button id="ht_diag_report" class="ht-btn ht-btn-ghost" style="font-size:.62rem">上报</button><button id="ht_diag_redo" class="ht-btn ht-btn-ghost" style="font-size:.62rem">重新诊断</button><button id="ht_diag_close" class="ht-btn ht-btn-ghost" style="font-size:.62rem">关闭</button></div></div>`);
+        const { el: toastEl, close } = createFixedToast('ht_diag_result_toast', `<div style="pointer-events:all;width:92vw;max-width:420px;max-height:75vh;display:flex;flex-direction:column"><div class="title" style="margin:0 0 6px;flex-shrink:0;display:flex;align-items:baseline;justify-content:space-between">诊断结果<span style="font-size:.5rem;opacity:.35;margin-left:6px;font-weight:400">v${esc(diagVer)}</span><span id="ht_diag_qq" style="font-size:.6rem;opacity:.7;font-weight:500;cursor:pointer;margin-left:auto;border-bottom:1px dashed rgba(255,255,255,.4);color:#7ecfff">群:${QQ_GROUP}</span></div>${(_manifest && _manifest.version && _manifest.version !== state._deviceVersion) ? '<div id="ht-diag-upd-banner" style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.12);color:#86efac;border-radius:8px;padding:8px 10px;margin:0 0 6px;cursor:pointer;font-size:.55rem"><span>发现新版本 v' + esc(_manifest.version) + '，点此查看</span><span style="opacity:.7">›</span></div>' : ''}<div style="flex:1;overflow:auto;min-height:0">${html}</div><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0"><button id="ht_diag_copy" class="ht-btn ht-btn-success" style="font-size:.62rem">复制报告</button><button id="ht_diag_report" class="ht-btn ht-btn-ghost" style="font-size:.62rem">上报</button><button id="ht_diag_redo" class="ht-btn ht-btn-ghost" style="font-size:.62rem">重新诊断</button><button id="ht_diag_close" class="ht-btn ht-btn-ghost" style="font-size:.62rem">关闭</button></div></div>`);
         toastEl.querySelector('#ht_diag_close').onclick = () => close();
+        const _updBanner = toastEl.querySelector('#ht-diag-upd-banner');
+        if (_updBanner) { _updBanner.onclick = () => { close(); setTimeout(() => performUpdateFlow(), 200); }; }
         toastEl.querySelector('#ht_diag_copy').onclick = async () => {
             await copyToClipboard(text);
             createToast('已复制', 'green');
@@ -840,7 +829,7 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
     const showUpdateConfirm = (newVer, notes) => {
         return new Promise((resolve) => {
             const notesHtml = (notes && notes.trim()) ? esc(notes.trim()) : '（本次更新暂无说明）';
-            const { el, close } = createFixedToast('ht_update_confirm', `<div style="pointer-events:all;width:88vw;max-width:400px"><div class="title" style="margin:0 0 8px">发现新版本 v${esc(newVer)}</div><div style="font-size:.58rem;line-height:1.6;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:8px 10px;max-height:40vh;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${notesHtml}</div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="ht_upd_cancel" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:inherit;cursor:pointer;">取消</button><button id="ht_upd_ok" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.25);color:#86efac;cursor:pointer;">确认更新</button></div></div>`);
+            const { el, close } = createFixedToast('ht_update_confirm', `<div style="pointer-events:all;width:88vw;max-width:400px"><div class="title" style="margin:0 0 8px">热点流量监控 · 发现新版本 v${esc(newVer)}</div><div style="font-size:.58rem;line-height:1.6;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:8px 10px;max-height:40vh;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${notesHtml}</div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="ht_upd_cancel" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:inherit;cursor:pointer;">取消</button><button id="ht_upd_ok" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.25);color:#86efac;cursor:pointer;">确认更新</button></div></div>`);
             let done = false;
             const finish = (v) => { if (done) return; done = true; close(); resolve(v); };
             el.querySelector('#ht_upd_cancel').onclick = () => finish(false);
@@ -848,15 +837,8 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
         });
     };
 
-    const handleUpdateClick = async () => {
-        if (!state.installed) return;
+    const performUpdateFlow = async () => {
         if (_updating) return createToast('正在更新中，请稍候', 'yellow');
-        clearTimeout(_verTapTimer);
-        _verTapCount++;
-        _verTapTimer = setTimeout(() => { _verTapCount = 0; }, 3000);
-        if (_verTapCount < 3) return;
-        _verTapCount = 0;
-        clearTimeout(_verTapTimer);
         if (!(await checkAdvancedFunc())) return;
         if (!_manifest) await fetchManifest('update');
         if (!_manifest) {
@@ -877,7 +859,22 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
             }
         } catch (e) {
             createToast('更新失败：' + (e?.message || String(e)), 'red');
-        } finally { _updating = false; close(); }
+        } finally {
+            _updating = false;
+            close();
+        }
+    };
+
+    const handleUpdateClick = async () => {
+        if (!state.installed) return;
+        if (_updating) return createToast('正在更新中，请稍候', 'yellow');
+        clearTimeout(_verTapTimer);
+        _verTapCount++;
+        _verTapTimer = setTimeout(() => { _verTapCount = 0; }, 3000);
+        if (_verTapCount < 3) return;
+        _verTapCount = 0;
+        clearTimeout(_verTapTimer);
+        await performUpdateFlow();
     };
 
     const bind = (el) => {

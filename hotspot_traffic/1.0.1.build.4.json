@@ -1,0 +1,7 @@
+{
+    "rev": "1.0.1.build.5",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.1.build.5",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.0.1.build.5",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v1.0.1.build.5.js",
+    "notes": "1.版本更新交互方式优化\n2.诊断功能重构及增强\n3.代码精简，减少性能开销"
+}

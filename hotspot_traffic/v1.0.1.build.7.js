@@ -547,8 +547,8 @@ rm -rf ${sq(DATA_DIR)}
           ${summaryHtml}
         </div>
         <div class="ht-card">
-          <div class="ht-row" style="justify-content:space-between;margin-bottom:5px;"><b>设备明细</b></div>
-          ${devicesHtml}
+          <div class="ht-row" style="justify-content:space-between;margin-bottom:5px;"><b>设备明细</b><button id="ht_devices_toggle" class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:2px 8px;margin-left:auto;">${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? '展开 ▼' : '收起 ▲'}</button></div>
+          <div id="ht_devices_container" style="${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? 'display:none' : ''}">${devicesHtml}</div>
         </div>`;
     };
 
@@ -773,6 +773,19 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
     const bindDataArea = () => {
         const el = document.querySelector(`#${MODAL}`);
         if (!el) return;
+
+        const toggleBtn = el.querySelector('#ht_devices_toggle');
+        if (toggleBtn) {
+            toggleBtn.onclick = (e) => {
+                e.stopPropagation();
+                const container = el.querySelector('#ht_devices_container');
+                if (!container) return;
+                const isCollapsed = container.style.display === 'none';
+                container.style.display = isCollapsed ? '' : 'none';
+                toggleBtn.textContent = isCollapsed ? '收起 ▲' : '展开 ▼';
+                localStorage.setItem('hotspot_traffic_devices_collapsed', isCollapsed ? '0' : '1');
+            };
+        }
 
         el.querySelectorAll('[data-full-mac]').forEach((span) => {
             span.onclick = (e) => {

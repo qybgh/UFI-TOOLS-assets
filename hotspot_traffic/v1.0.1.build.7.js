@@ -440,6 +440,11 @@ rm -rf ${sq(DATA_DIR)}
       #${MODAL} .ht-up{color:#67e8f9;}
       #${MODAL} .ht-down{color:#86efac;}
       #${MODAL} .ht-total{color:rgba(255,255,255,.7);}
+      #${MODAL} .ht-summary-val .ht-up,#${MODAL} .ht-summary-val .ht-down{color:inherit;}
+      #${MODAL} .ht-muted{color:rgba(255,255,255,.35);}
+      #${MODAL} .ht-status-ok{color:#86efac;}
+      #${MODAL} .ht-status-warn{color:#fdba74;}
+      #${MODAL} .ht-status-alert{color:#fca5a5;}
       #${MODAL} .ht-empty{padding:10px;border:1px dashed rgba(255,255,255,.12);border-radius:9px;opacity:.55;text-align:center;font-size:.6rem;}
       #${MODAL} .ht-updated{font-size:.52rem;opacity:.35;margin-left:auto;}
       #${MODAL} .ht-date{font-size:.56rem;opacity:.5;margin-left:6px;color:#93c5fd;}
@@ -514,17 +519,17 @@ rm -rf ${sq(DATA_DIR)}
             const unattrSigned = iptTotal - deviceTotalBytes;
             const unattrAbs = Math.abs(unattrSigned);
             const unattrPct = iptTotal > 0 ? Math.round(unattrAbs / iptTotal * 100) : 0;
-            const diffColor = (diffSigned < 0) ? '#fca5a5'
-                : (diffPct > 10 ? '#fdba74' : '#86efac');
-            const unattrColor = (unattrSigned < 0) ? '#fca5a5'
-                : (unattrAbs <= 1048576) ? '#86efac'
-                : (unattrPct > 30) ? '#fdba74' : '#86efac';
-            const zeroWarn = (summary.zeroStreak >= 3 && installed) ? `<div style="font-size:.55rem;color:#fca5a5;margin-top:4px;">热点合计持续为0，可能受硬件加速影响，建议点击「诊断」排查</div>` : '';
+            const diffCls = (diffSigned < 0) ? 'ht-status-alert'
+                : (diffPct > 10 ? 'ht-status-warn' : 'ht-status-ok');
+            const unattrCls = (unattrSigned < 0) ? 'ht-status-alert'
+                : (unattrAbs <= 1048576) ? 'ht-status-ok'
+                : (unattrPct > 30) ? 'ht-status-warn' : 'ht-status-ok';
+            const zeroWarn = (summary.zeroStreak >= 3 && installed) ? `<div class="ht-status-alert" style="font-size:.55rem;margin-top:4px;">热点合计持续为0，可能受硬件加速影响，建议点击「诊断」排查</div>` : '';
             summaryHtml = `<div class="ht-summary-grid">
-            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(sysDelta))}</div><div class="ht-summary-lbl">系统增量${(sysTxDelta || sysRxDelta) ? renderUlDl(sysTxDelta, sysRxDelta) : ''}</div></div>
-            <div class="ht-summary-item"><div class="ht-summary-val ht-down">${esc(htFormatBytes(iptTotal))}</div><div class="ht-summary-lbl">热点合计${useTether ? '' : ` <span style="font-size:.48rem;opacity:.6">v4:${esc(htFormatBytes(iptV4))} v6:${esc(htFormatBytes(iptV6))}</span>`}</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">偏差:<span style="color:${diffColor}">${esc(htFormatBytes(diffSigned))}</span></div></div>
-            <div class="ht-summary-item"><div class="ht-summary-val" style="color:#93c5fd">在线 ${onlineCount} / 总 ${deviceCount}</div><div class="ht-summary-lbl">接入设备</div></div>
-            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(deviceTotalBytes))}</div><div class="ht-summary-lbl">设备合计${renderUlDl(deviceTxBytes, deviceRxBytes)}</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span style="color:${unattrColor}">${esc(htFormatBytes(unattrSigned))}</span></div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(sysDelta))}${(sysTxDelta || sysRxDelta) ? renderUlDl(sysTxDelta, sysRxDelta) : ''}</div><div class="ht-summary-lbl">系统增量</div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(iptTotal))}</div><div class="ht-summary-lbl">热点合计${useTether ? '' : ` <span style="font-size:.48rem;opacity:.6">v4:${esc(htFormatBytes(iptV4))} v6:${esc(htFormatBytes(iptV6))}</span>`}</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">偏差:<span class="${diffCls}">${esc(htFormatBytes(diffSigned))}</span></div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">在线 <span class="${onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${onlineCount}</span> / 总 ${deviceCount}</div><div class="ht-summary-lbl">接入设备</div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(deviceTotalBytes))}${renderUlDl(deviceTxBytes, deviceRxBytes)}</div><div class="ht-summary-lbl">设备合计</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span class="${unattrCls}">${esc(htFormatBytes(unattrSigned))}</span></div></div>
           </div>${zeroWarn}`;
         } else {
             summaryHtml = `<div class="ht-empty" style="font-size:.58rem;">启用并等待首次采集后显示</div>`;
@@ -543,12 +548,12 @@ rm -rf ${sq(DATA_DIR)}
         <div class="ht-card">
           <div class="ht-row" style="justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;">
             <div class="ht-row"><b>流量概览</b><span class="ht-date">${esc(dataDate)}${installed && updatedShort ? `（更新时间 ${esc(updatedShort)}）` : ''}</span></div>
+            <button id="ht_devices_toggle" class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:2px 8px;">${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? '设备明细 ▼' : '设备明细 ▲'}</button>
           </div>
           ${summaryHtml}
         </div>
-        <div class="ht-card">
-          <div class="ht-row" style="justify-content:space-between;margin-bottom:5px;"><b>设备明细</b><button id="ht_devices_toggle" class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:2px 8px;margin-left:auto;">${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? '展开 ▼' : '收起 ▲'}</button></div>
-          <div id="ht_devices_container" style="${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? 'display:none' : ''}">${devicesHtml}</div>
+        <div class="ht-card" id="ht_devices_card" style="${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? 'display:none' : ''}">
+          ${devicesHtml}
         </div>`;
     };
 
@@ -778,11 +783,11 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
         if (toggleBtn) {
             toggleBtn.onclick = (e) => {
                 e.stopPropagation();
-                const container = el.querySelector('#ht_devices_container');
-                if (!container) return;
-                const isCollapsed = container.style.display === 'none';
-                container.style.display = isCollapsed ? '' : 'none';
-                toggleBtn.textContent = isCollapsed ? '收起 ▲' : '展开 ▼';
+                const card = el.querySelector('#ht_devices_card');
+                if (!card) return;
+                const isCollapsed = card.style.display === 'none';
+                card.style.display = isCollapsed ? '' : 'none';
+                toggleBtn.textContent = isCollapsed ? '设备明细 ▲' : '设备明细 ▼';
                 localStorage.setItem('hotspot_traffic_devices_collapsed', isCollapsed ? '0' : '1');
             };
         }

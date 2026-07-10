@@ -1,0 +1,7 @@
+{
+    "rev": "1.0.1.build.6",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.1.build.6",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.0.1.build.6",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v1.0.1.build.6.js",
+    "notes": "1.版本更新内容可预览(下次更新可用)\n2.诊断功能增强\n3.代码精简，减少性能开销\n4.其它细节优化"
+}

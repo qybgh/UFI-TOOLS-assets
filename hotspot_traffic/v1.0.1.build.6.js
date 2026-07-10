@@ -481,6 +481,8 @@ rm -rf ${sq(DATA_DIR)}
       </tr>`;
     };
 
+    const renderUlDl = (tx, rx) => ` <span style="font-size:.48rem;opacity:.7"><span class="ht-up">↑${esc(htFormatBytes(tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(rx))}</span></span>`;
+
     const renderDataArea = () => {
         const installed = state.installed;
         const devicesMap = (state.dataCache && state.dataCache.devices) ? state.dataCache.devices : {};
@@ -491,6 +493,8 @@ rm -rf ${sq(DATA_DIR)}
         });
         const summary = state.summary;
         const dataDate = (state.dataCache && state.dataCache.date) || new Date().toISOString().slice(0, 10);
+        const deviceTxBytes = deviceList.reduce((s, d) => s + (d.txBytes || 0), 0);
+        const deviceRxBytes = deviceList.reduce((s, d) => s + (d.rxBytes || 0), 0);
 
         let summaryHtml;
         if (summary) {
@@ -502,6 +506,8 @@ rm -rf ${sq(DATA_DIR)}
             const deviceCount = summary.deviceCount || 0;
             const deviceTotalBytes = summary.deviceTotalBytes || 0;
             const useTether = summary.useTether || false;
+            const sysTxDelta = summary.sysDeltaTxBytes || 0;
+            const sysRxDelta = summary.sysDeltaRxBytes || 0;
             const diffSigned = sysDelta - iptTotal;
             const diffAbs = Math.abs(diffSigned);
             const diffPct = sysDelta > 0 ? Math.round(diffAbs / sysDelta * 100) : 0;
@@ -515,10 +521,10 @@ rm -rf ${sq(DATA_DIR)}
                 : (unattrPct > 30) ? '#fdba74' : '#86efac';
             const zeroWarn = (summary.zeroStreak >= 3 && installed) ? `<div style="font-size:.55rem;color:#fca5a5;margin-top:4px;">热点合计持续为0，可能受硬件加速影响，建议点击「诊断」排查</div>` : '';
             summaryHtml = `<div class="ht-summary-grid">
-            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(sysDelta))}</div><div class="ht-summary-lbl">系统增量</div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(sysDelta))}</div><div class="ht-summary-lbl">系统增量${(sysTxDelta || sysRxDelta) ? renderUlDl(sysTxDelta, sysRxDelta) : ''}</div></div>
             <div class="ht-summary-item"><div class="ht-summary-val ht-down">${esc(htFormatBytes(iptTotal))}</div><div class="ht-summary-lbl">热点合计${useTether ? '' : ` <span style="font-size:.48rem;opacity:.6">v4:${esc(htFormatBytes(iptV4))} v6:${esc(htFormatBytes(iptV6))}</span>`}</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">偏差:<span style="color:${diffColor}">${esc(htFormatBytes(diffSigned))}</span></div></div>
             <div class="ht-summary-item"><div class="ht-summary-val" style="color:#93c5fd">在线 ${onlineCount} / 总 ${deviceCount}</div><div class="ht-summary-lbl">接入设备</div></div>
-            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(deviceTotalBytes))}</div><div class="ht-summary-lbl">设备合计</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span style="color:${unattrColor}">${esc(htFormatBytes(unattrSigned))}</span></div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(deviceTotalBytes))}</div><div class="ht-summary-lbl">设备合计${renderUlDl(deviceTxBytes, deviceRxBytes)}</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span style="color:${unattrColor}">${esc(htFormatBytes(unattrSigned))}</span></div></div>
           </div>${zeroWarn}`;
         } else {
             summaryHtml = `<div class="ht-empty" style="font-size:.58rem;">启用并等待首次采集后显示</div>`;

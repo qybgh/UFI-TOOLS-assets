@@ -99,7 +99,7 @@
             }
             const r = await run(`curl -sL --connect-timeout 8 --max-time 15 ${sq(url)}`, 20000);
             text = String(r?.content || '').trim();
-            if (!text) return;
+            if (!text || text[0] !== '{') return;
             const j = JSON.parse(text);
             if (!j.rev || !j.guard || !j.diag) return;
             _manifest = { version: j.rev, trafficUrl: j.guard, diagUrl: j.diag, jsUrl: j.js || '', notes: j.notes || '' };

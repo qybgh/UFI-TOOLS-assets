@@ -18,6 +18,8 @@
     const DATA_DIR = '/data/hotspot_traffic';
     const DATA_FILE = `${DATA_DIR}/data.json`;
     const DIAG_RESULT_FILE = `${DATA_DIR}/diag_result.json`;
+    const LAST_REPORT_TS_FILE = `${DATA_DIR}/_last_report_ts`;
+    const JQ = '/data/data/com.minikano.f50_sms/files/jq';
     const DIAG_LOCK_FILE = `${DATA_DIR}/diag.lock`;
     const DEVICE_INFO_FILE = `${DATA_DIR}/device_info.txt`;
     const LOG_FILE = '/sdcard/hotspot_traffic_log.log';
@@ -685,8 +687,7 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
         if (!state.diagResult) return createToast('暂无诊断结果', 'pink');
         const j = state.diagResult;
         const hasIssue = Array.isArray(j.checks) && j.checks.some(c => !c.startsWith('\u2713'));
-        const _coolRemain = (_lastReportTime && Date.now() - _lastReportTime < REPORT_COOLDOWN) ? REPORT_COOLDOWN - (Date.now() - _lastReportTime) : 0;
-        const reportStatus = (j.auto_reported || _coolRemain > 0) ? '<span style="color:#4ade80">\u2714 \u5df2\u4e0a\u62a5</span>'
+        const reportStatus = j.auto_reported ? '<span style="color:#4ade80">\u2714 \u5df2\u4e0a\u62a5</span>'
             : !hasIssue ? '<span style="opacity:.4">\u65e0\u5f02\u5e38\uff0c\u65e0\u9700\u4e0a\u62a5</span>'
             : '<span style="color:#93c5fd">\u2191 \u5efa\u8bae\u4e0a\u62a5</span>';
         let html = '';
@@ -706,7 +707,7 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
 
         const text = JSON.stringify(j);
         const diagVer = j.version || state._deviceVersion || '';
-        const { el: toastEl, close } = createFixedToast('ht_diag_result_toast', `<div style="pointer-events:all;width:92vw;max-width:420px;max-height:75vh;display:flex;flex-direction:column"><div class="title" style="margin:0 0 6px;flex-shrink:0;display:flex;align-items:baseline;justify-content:space-between">诊断结果<span style="font-size:.5rem;opacity:.35;margin-left:6px;font-weight:400">v${esc(diagVer)}</span><span id="ht_diag_qq" style="font-size:.6rem;opacity:.7;font-weight:500;cursor:pointer;margin-left:auto;border-bottom:1px dashed rgba(255,255,255,.4);color:#7ecfff">群:${QQ_GROUP}</span></div>${(_manifest && _manifest.version && _manifest.version !== state._deviceVersion) ? '<div id="ht-diag-upd-banner" style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.12);color:#86efac;border-radius:8px;padding:8px 10px;margin:0 0 6px;cursor:pointer;font-size:.55rem"><span>发现新版本 v' + esc(_manifest.version) + '，点此查看</span><span style="opacity:.7">›</span></div>' : ''}<div style="flex:1;overflow:auto;min-height:0">${html}</div><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0"><button id="ht_diag_copy" class="ht-btn ht-btn-success" style="font-size:.62rem">复制报告</button><button id="ht_diag_report" class="ht-btn ht-btn-ghost" style="font-size:.62rem">上报</button><button id="ht_diag_redo" class="ht-btn ht-btn-ghost" style="font-size:.62rem">重新诊断</button><button id="ht_diag_close" class="ht-btn ht-btn-ghost" style="font-size:.62rem">关闭</button></div></div>`);
+        const { el: toastEl, close } = createFixedToast('ht_diag_result_toast', `<div style="pointer-events:all;width:92vw;max-width:420px;max-height:75vh;display:flex;flex-direction:column"><div class="title" style="margin:0 0 6px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between">诊断结果<span style="font-size:.5rem;opacity:.35;margin-left:6px;font-weight:400">v${esc(diagVer)}</span><span id="ht_diag_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div>${(_manifest && _manifest.version && _manifest.version !== state._deviceVersion) ? '<div id="ht-diag-upd-banner" style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.12);color:#86efac;border-radius:8px;padding:8px 10px;margin:0 0 6px;cursor:pointer;font-size:.55rem"><span>发现新版本 v' + esc(_manifest.version) + '，点此查看</span><span style="opacity:.7">›</span></div>' : ''}<div style="flex:1;overflow:auto;min-height:0">${html}</div><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0"><button id="ht_diag_copy" class="ht-btn ht-btn-success" style="font-size:.62rem">复制报告</button><button id="ht_diag_report" class="ht-btn ht-btn-ghost" style="font-size:.62rem">上报</button><button id="ht_diag_redo" class="ht-btn ht-btn-ghost" style="font-size:.62rem">重新诊断</button><button id="ht_diag_close" class="ht-btn ht-btn-ghost" style="font-size:.62rem">关闭</button></div></div>`);
         toastEl.querySelector('#ht_diag_close').onclick = () => close();
         const _updBanner = toastEl.querySelector('#ht-diag-upd-banner');
         if (_updBanner) { _updBanner.onclick = () => { close(); setTimeout(() => performUpdateFlow(), 200); }; }
@@ -715,22 +716,30 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
             createToast('已复制', 'green');
         };
         toastEl.querySelector('#ht_diag_report').onclick = async () => {
-            const _freshChk = await run(`timeout 2s awk '/auto_reported/{print}' ${sq(DIAG_RESULT_FILE)} 2>/dev/null`, 3000);
-            if (String(_freshChk?.content || '').includes('auto_reported')) {
-                _lastReportTime = Date.now();
-                return createToast('已自动上报，无需重复操作', 'green');
-            }
-            if (j.auto_reported) {
-                return createToast('已自动上报，无需重复操作', 'green');
-            }
             if (!hasIssue) {
                 createToast('诊断结果无异常，如有问题请加群反馈', 'pink', 3000);
                 await copyToClipboard(QQ_GROUP);
                 return;
             }
+            const markReported = async () => {
+                _lastReportTime = Date.now();
+                j.auto_reported = true;
+                const _sec = Math.floor(_lastReportTime / 1000);
+                await run(`printf '%s' ${sq(_sec)} > ${sq(LAST_REPORT_TS_FILE)}
+_m=$(${sq(JQ)} '.auto_reported=true' ${sq(DIAG_RESULT_FILE)} 2>/dev/null); [ -n "$_m" ] && printf '%s' "$_m" > ${sq(DIAG_RESULT_FILE + '.tmp')} && mv ${sq(DIAG_RESULT_FILE + '.tmp')} ${sq(DIAG_RESULT_FILE)}
+echo`, 5000);
+            };
+            const _st = await run(`_ts=$(awk '{print $1+0}' ${sq(LAST_REPORT_TS_FILE)} 2>/dev/null); _ar=$(awk '/auto_reported/{c=1} END{print c+0}' ${sq(DIAG_RESULT_FILE)} 2>/dev/null); echo "ts=$_ts ar=$_ar"`, 3000);
+            const _out = String(_st?.content || '');
+            const _tsm = _out.match(/ts=(\d+)/);
+            const _fts = _tsm ? parseInt(_tsm[1]) : 0;
+            if (_fts) _lastReportTime = Math.max(_lastReportTime, _fts * 1000);
+            const autoReported = j.auto_reported || _out.includes('ar=1');
+            if (autoReported) {
+                return createToast('当前诊断已上报，请加群跟进或重新诊断', 'green', 3000);
+            }
             if (_lastReportTime && Date.now() - _lastReportTime < REPORT_COOLDOWN) {
-                createToast('上报间隔未达15分钟，请稍后重新诊断后再上报', 'pink');
-                return;
+                return createToast('上报间隔未达15分钟，请稍后重新诊断后再上报', 'pink');
             }
             try {
                 const body = JSON.stringify({msgtype: 'text', text: {content: text}});
@@ -738,8 +747,8 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
                 const r = await run(`printf '%s' ${sq(body)} > ${sq(tmpFile)} && _r=$(timeout 10s curl -s -X POST -H 'Content-Type: application/json;charset=UTF-8' -d @${sq(tmpFile)} ${sq(DINGTALK_WEBHOOK)} 2>/dev/null) && rm -f ${sq(tmpFile)} && echo "$_r" || { rm -f ${sq(tmpFile)}; echo '{"errcode":-1}'; }`, 15000);
                 const output = String(r?.content || '').trim();
                 if (output.includes('"errcode":0') || output.includes('"errcode": 0')) {
+                    await markReported();
                     createToast('上报成功，可加群跟进', 'green');
-                    _lastReportTime = Date.now();
                 } else if (output.includes('310000')) {
                     createToast('版本过旧，请更新插件后重试', 'red', 5000);
                 } else {
@@ -759,9 +768,14 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
     };
 
     const restoreDiagState = async () => {
-        const r = await run(`echo __RESULT__
+        const r = await run(`echo __TS__
+awk '{print $1+0}' ${sq(LAST_REPORT_TS_FILE)} 2>/dev/null
+echo __RESULT__
 [ -s ${sq(DIAG_RESULT_FILE)} ] && timeout 3s awk '{print}' ${sq(DIAG_RESULT_FILE)} 2>/dev/null || echo`, 5000);
         const text = String(r?.content || '');
+        const _tsStr = text.includes('__TS__') ? text.split('__TS__')[1].split('__RESULT__')[0].trim() : '';
+        const _fts = parseInt(_tsStr) || 0;
+        if (_fts) _lastReportTime = Math.max(_lastReportTime, _fts * 1000);
         const resultStr = text.includes('__RESULT__') ? text.split('__RESULT__')[1].trim() : '';
         if (resultStr) {
             try {

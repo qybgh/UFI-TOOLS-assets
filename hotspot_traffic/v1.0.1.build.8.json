@@ -1,6 +1,6 @@
 {
-    "rev": "1.0.1.build.8",
-    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.1.build.8",
+    "rev": "1.0.1.build.9",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.1.build.9",
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.0.1.build.8",
     "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v1.0.1.build.8.js",
     "notes": "1.版本更新内容可预览(下次更新可用)\n2.设备明细支持隐藏\n3.诊断功能增强\n4.代码精简，提升性能\n5.其它细节优化"

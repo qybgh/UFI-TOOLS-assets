@@ -88,6 +88,7 @@
     };
 
     let _manifest = null;
+    let _noUpdateConfirmed = false;
     const fetchManifest = async (mode) => {
         if (!GH_VERSION_BASE) return;
         let url = null;
@@ -101,7 +102,10 @@
             }
             const r = await run(`curl -sL --connect-timeout 8 --max-time 15 ${sq(url)}`, 20000);
             text = String(r?.content || '').trim();
-            if (!text || text[0] !== '{') return;
+            if (!text || text[0] !== '{') {
+                if (mode !== 'init') _noUpdateConfirmed = true;
+                return;
+            }
             const j = JSON.parse(text);
             if (!j.rev || !j.guard || !j.diag) return;
             _manifest = { version: j.rev, trafficUrl: j.guard, diagUrl: j.diag, jsUrl: j.js || '', notes: j.notes || '' };
@@ -884,7 +888,7 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
     const performUpdateFlow = async () => {
         if (_updating) return createToast('正在更新中，请稍候', 'yellow');
         if (!(await checkAdvancedFunc())) return;
-        if (!_manifest) await fetchManifest('update');
+        if (!_manifest && !_noUpdateConfirmed) await fetchManifest('update');
         if (!_manifest) {
             return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
         }

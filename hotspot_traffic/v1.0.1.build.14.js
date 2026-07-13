@@ -250,7 +250,7 @@
     const resolveDisplayName = (device) => {
         const customName = getCustomName(device.mac);
         const hostname = (device.hostname || '').trim();
-        let displayName = customName || hostname;
+        let displayName = customName/*  || hostname */;
         if (!displayName) {
             const an = getAN(device.mac);
             if (an === null) { /* schedAN(device.mac); */ displayName = '未知设备'; }
@@ -484,12 +484,15 @@ rm -rf ${sq(DATA_DIR)}
                     if (!mac) return;
                     onlineMacs.add(mac);
                     if (!state.dataCache.devices[mac]) {
-                        state.dataCache.devices[mac] = { mac, ip, hostname: '', online: true, txBytes: 0, rxBytes: 0 };
+                        const hostname = (parts[2] || '').trim();
+                        state.dataCache.devices[mac] = { mac, ip, hostname, online: true, txBytes: 0, rxBytes: 0 };
                     } else {
                         const dev = state.dataCache.devices[mac];
                         const wasOffline = !dev.online;
                         dev.online = true;
                         if (ip) dev.ip = ip;
+                        const hn = (parts[2] || '').trim();
+                        if (hn && !dev.hostname) dev.hostname = hn;
                         if (wasOffline) {
                             const an = getAN(mac);
                             if (an === '') { try { localStorage.removeItem(AN_PRE + mac); } catch {} }
@@ -641,8 +644,10 @@ rm -rf ${sq(DATA_DIR)}
         const s = document.createElement('style');
         s.id = STYLE;
         s.textContent = `
-      #${MODAL} .ht-wrap{display:flex;flex-direction:column;gap:6px;font-size:.72rem;}
+      #${MODAL} .ht-wrap{display:flex;flex-direction:column;gap:1px;font-size:.72rem;}
       #${MODAL} .ht-card{border:1px solid rgba(255,255,255,.08);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border-radius:12px;padding:8px 10px;}
+      #${MODAL} .ht-wrap>.ht-card:first-child{padding-top:6px;padding-bottom:6px;}
+      #${MODAL} #ht_data_area{display:flex;flex-direction:column;gap:1px;}
       #${MODAL} .ht-row{display:flex;align-items:center;gap:5px;}
       #${MODAL} .ht-btn{border-radius:7px;padding:5px 10px;font-size:.64rem;cursor:pointer;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:inherit;transition:background .15s,opacity .15s;}
       #${MODAL} .ht-btn:hover{background:rgba(255,255,255,.14);}
@@ -682,7 +687,7 @@ rm -rf ${sq(DATA_DIR)}
       #${MODAL} .ht-summary-val{font-size:.76rem;font-weight:700;margin-bottom:1px;line-height:1.15;}
       #${MODAL} .ht-summary-lbl{font-size:.52rem;opacity:.45;line-height:1.25;}
       #${MODAL} .ht-diag-item{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:.58rem;line-height:1.35;word-break:break-all;}
-      @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:5px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
+      @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:1px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
     `;
         document.head.appendChild(s);
     };
@@ -774,7 +779,7 @@ rm -rf ${sq(DATA_DIR)}
 
         return `<div class="ht-wrap">
         <div class="ht-card">
-          <div class="ht-row" style="justify-content:space-between;margin-bottom:5px;">
+          <div class="ht-row" style="justify-content:space-between;">
             <div class="ht-row"><span class="ht-dot ${dotCls}"></span><span style="font-size:.68rem;">${esc(statusText)}</span>${_verHtml}</div>
             <div class="ht-row">
               <button class="ht-btn ht-btn-ghost" data-act="log" ${installed ? '' : 'disabled'}>日志</button>

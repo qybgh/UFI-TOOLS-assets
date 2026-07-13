@@ -41,11 +41,6 @@
     const _PS = `<!-- [${_M}_START]`;
     const _PE = `<!-- [${_M}_END]`;
     const _SIG = '@@HT_PLUGIN_ID:7f3a9c@@';
-    const AN_PRE = LS_KEY + 'an_';
-    const AN_TS = LS_KEY + 'an_ts';
-    let _anPending = new Set();
-    let _anTimer = null;
-    let _anQ = false;
     let _dataEvtBound = false;
 
     // ─── utils ────────────────────────────────────────────────────────────────
@@ -233,7 +228,7 @@
         const iptTotal = summary.iptTotalBytes || 0;
         const iptV4 = summary.iptTotalV4Bytes || 0;
         const iptV6 = summary.iptTotalV6Bytes || 0;
-        const onlineCount = summary.onlineCount || 0;
+        const onlineCount = deviceList.filter(d => d.online).length;
         const deviceCount = summary.deviceCount || 0;
         const deviceTotalBytes = summary.deviceTotalBytes || 0;
         const useTether = summary.useTether || false;
@@ -253,74 +248,7 @@
     };
 
     const resolveDisplayName = (device) => {
-        const customName = getCustomName(device.mac);
-        const hostname = (device.hostname || '').trim();
-        let displayName = customName/*  || hostname */;
-        if (!displayName) {
-            const an = getAN(device.mac);
-            if (an === null) { /* schedAN(device.mac); */ displayName = '未知设备'; }
-            else { displayName = an || '未知设备'; }
-        }
-        return displayName;
-    };
-
-    const getAN = (mac) => {
-        const v = localStorage.getItem(AN_PRE + mac);
-        if (v === null) return null;
-        const ts = parseInt(localStorage.getItem(AN_TS)) || 0;
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        if (ts && ts < today.getTime()) return null;
-        return v;
-    };
-    const setAN = (mac, name) => { try { localStorage.setItem(AN_PRE + mac, name || ''); } catch {} };
-
-    const fetchAN = async (macs) => {
-        if (!macs.length || typeof getData !== 'function') return;
-        if (_anQ) {
-            macs.forEach(m => _anPending.add(m));
-            if (!_anTimer) _anTimer = setTimeout(() => {
-                const batch = Array.from(_anPending);
-                _anPending.clear();
-                _anTimer = null;
-                fetchAN(batch);
-            }, 600);
-            return;
-        }
-        _anQ = true;
-        try {
-            const res = await getData(new URLSearchParams({ cmd: 'station_list,lan_station_list,hostNameList' }));
-            const toArr = (v) => {
-                if (Array.isArray(v)) return v;
-                if (typeof v === 'string') { try { return JSON.parse(v) || []; } catch { return []; } }
-                return (v && typeof v === 'object') ? Object.values(v) : [];
-            };
-            const nameMap = {};
-            for (const d of toArr(res?.devices)) {
-                const m = String(d?.mac || d?.mac_addr || '').toUpperCase().trim();
-                const n = String(d?.hostname || d?.host_name || d?.name || '').trim();
-                if (m && n) nameMap[m] = n;
-            }
-            for (const d of [...toArr(res?.station_list), ...toArr(res?.lan_station_list)]) {
-                const m = String(d?.mac_addr || d?.mac || '').toUpperCase().trim();
-                const n = String(d?.hostname || d?.host_name || '').trim();
-                if (m && !nameMap[m] && n) nameMap[m] = n;
-            }
-            for (const mac of macs) setAN(mac, nameMap[mac.toUpperCase()] || '');
-            localStorage.setItem(AN_TS, String(Date.now()));
-            setTimeout(() => patchDataArea(), 50);
-        } catch (e) { console.warn('[HT] fetchAN:', e); }
-        finally { _anQ = false; }
-    };
-
-    const schedAN = (mac) => {
-        _anPending.add(mac);
-        if (_anTimer) clearTimeout(_anTimer);
-        _anTimer = setTimeout(() => {
-            const batch = Array.from(_anPending);
-            _anPending.clear();
-            _anTimer = null;
-            fetchAN(batch);
-        }, 600);
+        return getCustomName(device.mac) || '未知设备';
     };
 
     // ─── config read/write ────────────────────────────────────────────────────
@@ -404,7 +332,7 @@ mkdir -p ${sq(DATA_DIR)}
             await cleanResidue();
             if (!(await probeIptables())) return createToast('当前不支持 iptables，无法安装，请重启设备后再试', 'red');
             await run(`mkdir -p ${sq(DATA_DIR)}`);
-            await run(`printf '%s' '0' > ${sq(DATA_DIR + '/sysfs_carry.txt')} && printf '%s' '0' > ${sq(DATA_DIR + '/sysfs_last.txt')} && printf '%s' '0' > ${sq(DATA_DIR + '/ipt_carry.txt')} && rm -f ${sq(DATA_DIR + '/ipt_start.txt')} ${sq(DATA_DIR + '/ipt_last.txt')}; echo`);
+            await run(`printf '0 0 0\\n0 0 0\\n' > ${sq(DATA_DIR + '/sysfs_state.txt')}; printf '0 0 0\\n0 0 0\\n0 0 0\\n' > ${sq(DATA_DIR + '/ipt_state.txt')}; echo`);
             if (!(await deployTrafficBin()))
                 return createToast('上传脚本文件失败！', 'red');
             if (!(await deployDiagBin()))
@@ -439,7 +367,7 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
         if (!(await checkAdvancedFunc())) return createToast('没有开启高级功能，无法使用！', 'red');
         state._uninstalling = true;
         setAutoData(false);
-        if (_anTimer) { clearTimeout(_anTimer); _anTimer = null; } _anPending.clear(); _dataEvtBound = false;
+        _dataEvtBound = false;
         try {
             await run(`
 sed -i '/${NAME}/d' ${sq(BOOT_SH_FILE)} 2>/dev/null
@@ -493,15 +421,10 @@ rm -rf ${sq(DATA_DIR)}
                         state.dataCache.devices[mac] = { mac, ip, hostname, online: true, txBytes: 0, rxBytes: 0 };
                     } else {
                         const dev = state.dataCache.devices[mac];
-                        const wasOffline = !dev.online;
                         dev.online = true;
                         if (ip) dev.ip = ip;
                         const hn = (parts[2] || '').trim();
                         if (hn && !dev.hostname) dev.hostname = hn;
-                        if (wasOffline) {
-                            const an = getAN(mac);
-                            if (an === '') { try { localStorage.removeItem(AN_PRE + mac); } catch {} }
-                        }
                     }
                     if (state.dataCache.devices[mac]) state.dataCache.devices[mac]._missCount = 0;
                 });
@@ -649,10 +572,10 @@ rm -rf ${sq(DATA_DIR)}
         const s = document.createElement('style');
         s.id = STYLE;
         s.textContent = `
-      #${MODAL} .ht-wrap{display:flex;flex-direction:column;gap:1px;font-size:.72rem;}
+      #${MODAL} .ht-wrap{display:flex;flex-direction:column;gap:2px;font-size:.72rem;}
       #${MODAL} .ht-card{border:1px solid rgba(255,255,255,.08);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border-radius:12px;padding:8px 10px;}
       #${MODAL} .ht-wrap>.ht-card:first-child{padding-top:6px;padding-bottom:6px;}
-      #${MODAL} #ht_data_area{display:flex;flex-direction:column;gap:1px;}
+      #${MODAL} #ht_data_area{display:flex;flex-direction:column;gap:2px;}
       #${MODAL} .ht-row{display:flex;align-items:center;gap:5px;}
       #${MODAL} .ht-btn{border-radius:7px;padding:5px 10px;font-size:.64rem;cursor:pointer;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:inherit;transition:background .15s,opacity .15s;}
       #${MODAL} .ht-btn:hover{background:rgba(255,255,255,.14);}
@@ -692,7 +615,7 @@ rm -rf ${sq(DATA_DIR)}
       #${MODAL} .ht-summary-val{font-size:.76rem;font-weight:700;margin-bottom:1px;line-height:1.15;}
       #${MODAL} .ht-summary-lbl{font-size:.52rem;opacity:.45;line-height:1.25;}
       #${MODAL} .ht-diag-item{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:.58rem;line-height:1.35;word-break:break-all;}
-      @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:1px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
+      @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:2px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
     `;
         document.head.appendChild(s);
     };
@@ -700,7 +623,7 @@ rm -rf ${sq(DATA_DIR)}
     // ─── render ───────────────────────────────────────────────────────────────
     const renderDeviceRow = (device, index) => {
         const displayName = resolveDisplayName(device);
-        const defaultName = (device.hostname || '').trim() || getAN(device.mac) || '未知设备';
+        const defaultName = (device.hostname || '').trim() || '未知设备';
         const txBytes = device.txBytes || 0;
         const rxBytes = device.rxBytes || 0;
         const totalBytes = txBytes + rxBytes;

@@ -104,25 +104,30 @@
             if (mode === 'init') {
                 url = GH_VERSION_BASE + 'original.json';
             } else {
-                if (!state._deviceVersion || _purged) return;
+                if (!state._deviceVersion) return;
                 url = GH_VERSION_BASE + 'v' + state._deviceVersion + '.json';
             }
             const r = await run(`curl -sL --connect-timeout 8 --max-time 15 ${sq(url)}`, 20000);
             text = String(r?.content || '').trim();
             if (!text || text[0] !== '{') {
-                if (mode !== 'init' && !_purged) {
-                    const purgeUrl = url.replace('cdn', 'purge');
-                    run(`curl -sL --connect-timeout 8 --max-time 15 ${sq(purgeUrl)}`, 20000).catch(() => {});
+                if (mode === 'purge' && !_purged) {
                     _purged = true;
+                    const purgeUrl = url.replace('cdn', 'purge');
+                    run(`curl -sL --connect-timeout 8 --max-time 15 ${sq(purgeUrl)}`, 20000)
+                        .then((pr) => console.log('[HT] purge url:', purgeUrl, 'resp:', String(pr?.content || '').trim()))
+                        .catch((e) => console.warn('[HT] purge url:', purgeUrl, 'error:', e));
                 }
                 return;
             }
             const j = JSON.parse(text);
-            if (!j.rev || !j.guard || !j.diag) return;
+            if (!j.rev || !j.guard || !j.diag) {
+                console.warn('[HT] fetch url:', url, 'incomplete manifest:', text);
+                return;
+            }
             _manifest = { version: j.rev, trafficUrl: j.guard, diagUrl: j.diag, jsUrl: j.js || '', notes: j.notes || '' };
-            console.log('[HT] url:', url, 'manifest:', JSON.stringify(_manifest));
+            console.log('[HT] fetch url:', url, 'manifest:', JSON.stringify(_manifest));
         } catch (e) {
-            console.warn('[HT] url:', url, 'text:', text, 'error:', e);
+            console.warn('[HT] fetch url:', url, 'text:', text, 'error:', e);
         }
     };
 
@@ -1079,7 +1084,11 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
     const performUpdateFlow = async () => {
         if (_updating) return createToast('正在更新中，请稍候', 'yellow');
         if (!(await checkAdvancedFunc())) return;
-        if (!_manifest) await fetchManifest('update');
+        if (!_manifest) {
+            const { close: closeChecking } = createFixedToast('ht_update_checking', '正在检查更新...');
+            try { await fetchManifest('purge'); }
+            finally { closeChecking(); }
+        }
         if (!_manifest) {
             return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
         }

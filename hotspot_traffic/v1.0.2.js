@@ -1217,6 +1217,7 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
             await readStatus();
             await recoverPendingUpdate();
             await restoreDiagState();
+            if (state.installed) await loadData();
             renderIntoPanel();
             setAutoData(state.installed);
             fetchManifest().then(() => renderIntoPanel());

@@ -41,6 +41,7 @@
     const _PS = `<!-- [${_M}_START]`;
     const _PE = `<!-- [${_M}_END]`;
     const _SIG = '@@HT_PLUGIN_ID:7f3a9c@@';
+    const _PREV_VER = '';
     let _dataEvtBound = false;
 
     // ─── utils ────────────────────────────────────────────────────────────────
@@ -92,13 +93,29 @@
 
     let _manifest = null;
     let _purged = false;
+    const _initFallback = async () => {
+        if (!_PREV_VER || _manifest) return;
+        try {
+            const _fbUrl = GH_VERSION_BASE + 'latest.json?_=' + Date.now();
+            const _fbR = await run(`curl -sL --connect-timeout 8 --max-time 15 ${sq(_fbUrl)}`, 20000);
+            const _fbT = String(_fbR?.content || '').trim();
+            if (_fbT && _fbT[0] === '{') {
+                const _fbJ = JSON.parse(_fbT);
+                if (_fbJ.rev && _fbJ.guard && _fbJ.diag) {
+                    _manifest = { version: _fbJ.rev, trafficUrl: _fbJ.guard, diagUrl: _fbJ.diag, jsUrl: _fbJ.js || '', notes: _fbJ.notes || '' };
+                }
+            }
+        } catch {}
+    };
     const fetchManifest = async (mode) => {
         if (!GH_VERSION_BASE) return;
         let url = null;
         let text = null;
         try {
             if (mode === 'init') {
-                url = GH_VERSION_BASE + 'original.json';
+                url = _PREV_VER
+                    ? GH_VERSION_BASE + 'v' + _PREV_VER + '.json'
+                    : GH_VERSION_BASE + 'latest.json?_=' + Date.now();
             } else {
                 if (!state._deviceVersion) return;
                 url = GH_VERSION_BASE + 'v' + state._deviceVersion + '.json';
@@ -113,6 +130,7 @@
                         .then((pr) => console.log('[HT] purge url:', purgeUrl, 'resp:', String(pr?.content || '').trim()))
                         .catch((e) => console.warn('[HT] purge url:', purgeUrl, 'error:', e));
                 }
+                if (mode === 'init') await _initFallback();
                 return;
             }
             const j = JSON.parse(text);
@@ -124,6 +142,7 @@
             console.log('[HT] fetch url:', url, 'manifest:', JSON.stringify(_manifest));
         } catch (e) {
             console.warn('[HT] fetch url:', url, 'text:', text, 'error:', e);
+            if (mode === 'init') await _initFallback();
         }
     };
 
@@ -168,34 +187,39 @@ mv ${sq(TRAFFIC_NEW)} ${sq(TRAFFIC_BIN_FILE)} && mv ${sq(DIAG_NEW)} ${sq(DIAG_BI
 `, 5000);
     };
 
-    const applyPluginJs = async () => {
+    const applyPluginJs = async (prevVer) => {
         const chk = await run(`[ -s ${sq(PENDING_JS_FILE)} ] && echo EXISTS || echo NONE`, 2000);
-        if (!String(chk?.content || '').includes('EXISTS')) return;
-        const r = await run(`base64 ${sq(PENDING_JS_FILE)} | tr -d '\n'`, 15000);
-        const b64 = String(r?.content || '').trim();
-        if (!b64 || b64.length < 200) { await run(`rm -f ${sq(PENDING_JS_FILE)}`); return; }
+        const hasNewJs = String(chk?.content || '').includes('EXISTS');
+        if (!hasNewJs && !prevVer) return;
         let newJs;
-        try { newJs = new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0))); } catch { await run(`rm -f ${sq(PENDING_JS_FILE)}`); return; }
-        if (!newJs || newJs.length < 200) { await run(`rm -f ${sq(PENDING_JS_FILE)}`); return; }
+        if (hasNewJs) {
+            const r = await run(`base64 ${sq(PENDING_JS_FILE)} | tr -d '\n'`, 15000);
+            const b64 = String(r?.content || '').trim();
+            if (!b64 || b64.length < 200) { await run(`rm -f ${sq(PENDING_JS_FILE)}`); return; }
+            try { newJs = new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0))); } catch { await run(`rm -f ${sq(PENDING_JS_FILE)}`); return; }
+            if (!newJs || newJs.length < 200) { await run(`rm -f ${sq(PENDING_JS_FILE)}`); return; }
+        }
         const currentText = await getCustomHead();
-        if (!currentText) throw new Error('读取插件列表失败');
+        if (!currentText) { if (hasNewJs) throw new Error('读取插件列表失败'); return; }
         const _esc = s => s.replace(/[\[\]]/g, '\\$&');
         const pluginRegex = new RegExp(_esc(_PS) + '\\s*(.*?)\\s*-->([\\s\\S]*?)' + _esc(_PE) + '\\s*\\1\\s*-->', 'g');
         let found = false, newText = currentText, match;
         while ((match = pluginRegex.exec(currentText)) !== null) {
             if (match[2].includes(_SIG)) {
+                let content = hasNewJs ? newJs : match[2];
+                if (prevVer) content = content.replace(/const _PREV_VER = '[^']*'/, `const _PREV_VER = '${prevVer}'`);
+                if (!hasNewJs && content === match[2]) return;
                 const pluginName = match[1].trim();
-                const oldBlock = match[0];
-                const newBlock = `${_PS} ${pluginName} -->\n${newJs}\n${_PE} ${pluginName} -->`;
-                newText = currentText.replace(oldBlock, () => newBlock);
+                const newBlock = `${_PS} ${pluginName} -->\n${content}\n${_PE} ${pluginName} -->`;
+                newText = currentText.replace(match[0], () => newBlock);
                 found = true;
                 break;
             }
         }
-        if (!found) throw new Error('未找到目标插件');
+        if (!found) { if (hasNewJs) throw new Error('未找到当前插件，请加群 ' + QQ_GROUP + ' 联系作者'); return; }
         const saveResult = await setCustomHead(newText);
-        if (!saveResult || saveResult.result !== 'success') throw new Error('保存失败');
-        await run(`rm -f ${sq(PENDING_JS_FILE)}`);
+        if (hasNewJs && (!saveResult || saveResult.result !== 'success')) throw new Error('保存失败');
+        if (hasNewJs) await run(`rm -f ${sq(PENDING_JS_FILE)}`);
     };
 
     // ─── helpers ──────────────────────────────────────────────────────────────
@@ -298,7 +322,7 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
         if (!dv.startsWith('pending:')) return;
         const ver = dv.replace('pending:', '');
         let jsApplied = false;
-        try { await applyPluginJs(); jsApplied = true; } catch (e) { console.warn('[HT] recovery JS apply:', e); }
+        try { await applyPluginJs(_PREV_VER); jsApplied = true; } catch (e) { console.warn('[HT] recovery JS apply:', e); }
         await run(`rm -f ${sq(DIAG_RESULT_FILE)} ${sq(DATA_DIR + '/diag_state.txt')} ${sq(LAST_REPORT_TS_FILE)} ${sq(DIAG_LOCK_FILE)} 2>/dev/null`);
         clearDiagState();
         await run(`printf '%s' ${sq(ver)} > ${sq(DATA_DIR + '/.version.tmp')} && mv ${sq(DATA_DIR + '/.version.tmp')} ${sq(DATA_DIR + '/.version')}`);
@@ -373,7 +397,7 @@ mkdir -p ${sq(DATA_DIR)}
 _p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill "$_p" 2>/dev/null; pkill -f ${sq(SH_FILE)} 2>/dev/null; sleep 1; [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; pkill -9 -f ${sq(SH_FILE)} 2>/dev/null; rm -f ${sq(PID_FILE)}
 cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &
 `);
-            await applyPluginJs();
+            await applyPluginJs(_PREV_VER);
             if (ver) await run(`printf '%s' ${sq(ver)} > ${sq(DATA_DIR + '/.version.tmp')} && mv ${sq(DATA_DIR + '/.version.tmp')} ${sq(DATA_DIR + '/.version')}`);
             state.installed = true;
             state._deviceVersion = ver;
@@ -492,7 +516,6 @@ rm -rf ${sq(DATA_DIR)}
             const devicesMap = state.dataCache.devices || {};
             const deviceList = sortDevices(devicesMap);
             const summary = state.summary;
-            const installed = state.installed;
 
             if (summary) {
                 const m = calcSummaryMetrics(summary, deviceList);
@@ -908,7 +931,7 @@ echo`, 5000);
                     await markReported();
                     createToast('上报成功，可加群跟进', 'green');
                 } else if (output.includes('310000')) {
-                    createToast('版本过旧，请更新插件后重试', 'red', 5000);
+                    createToast('当前插件版本过旧，请更新到最新版本后重试', 'red', 5000);
                 } else {
                     createToast('上报失败，请加群反馈', 'red');
                 }
@@ -1007,6 +1030,7 @@ echo __RESULT__
             await fetchManifest('update');
             if (!_manifest) throw new Error('无法获取版本信息');
         }
+        const oldVer = state._deviceVersion || '';
         const ver = _manifest?.version || '';
         await run(`rm -f ${sq(TRAFFIC_NEW)} ${sq(DIAG_NEW)} ${sq(PENDING_JS_FILE)} ${sq(TRAFFIC_BIN_FILE + '.b64')} ${sq(DIAG_BIN_FILE + '.b64')} 2>/dev/null`);
         if (!(await downloadTrafficBin())) throw new Error('主脚本获取失败');
@@ -1017,7 +1041,7 @@ echo __RESULT__
 _p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill "$_p" 2>/dev/null; pkill -f ${sq(SH_FILE)} 2>/dev/null; sleep 1; [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; pkill -9 -f ${sq(SH_FILE)} 2>/dev/null; rm -f ${sq(PID_FILE)}
 cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &
 `);
-        await applyPluginJs();
+        await applyPluginJs(oldVer);
         await run(`rm -f ${sq(DIAG_RESULT_FILE)} ${sq(DATA_DIR + '/diag_state.txt')} ${sq(LAST_REPORT_TS_FILE)} ${sq(DIAG_LOCK_FILE)} 2>/dev/null`);
         clearDiagState();
         if (ver) await run(`printf '%s' ${sq(ver)} > ${sq(DATA_DIR + '/.version.tmp')} && mv ${sq(DATA_DIR + '/.version.tmp')} ${sq(DATA_DIR + '/.version')}`);
@@ -1052,13 +1076,8 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
         const { close } = createFixedToast('ht_update_loading', '正在更新...');
         try {
             await performUpdate();
-            if (_manifest?.jsUrl) {
-                createToast('已更新到 v' + state._deviceVersion + '，2秒后刷新页面', 'green');
-                setTimeout(() => location.reload(), 2000);
-            } else {
-                renderIntoPanel();
-                createToast('已更新到 v' + state._deviceVersion, 'green');
-            }
+            createToast('已更新到 v' + state._deviceVersion + '，2秒后刷新页面', 'green');
+            setTimeout(() => location.reload(), 2000);
         } catch (e) {
             createToast('更新失败：' + (e?.message || String(e)), 'red');
         } finally {
@@ -1138,7 +1157,7 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
     };
 
     // ─── help ─────────────────────────────────────────────────────────────────
-    const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>诊断</b><br>自动检测常见问题，可一键上报给作者分析。`;
+    const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>诊断</b><br>自动检测常见问题，可一键上报给作者分析。遇到问题请加QQ群 <b>${QQ_GROUP}</b> 反馈交流。`;
 
     const showHelp = () => {
         const { el: toastEl, close } = createFixedToast('ht_help_toast', `

@@ -593,9 +593,10 @@ rm -rf ${sq(DATA_DIR)}
             return String(r?.content ?? '').trim();
         };
         const logText = await fetchLog();
-        const { el: toastEl, close } = createFixedToast('ht_log_toast', `<div style="pointer-events:all;width:90vw;max-width:420px"><div class="title" style="margin:0 0 6px">运行日志</div><textarea id="ht_log_area" readonly style="width:100%;height:40vh;font-size:.56rem;line-height:1.5;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:6px;color:inherit;resize:none;"></textarea><div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px"><button id="ht_log_refresh" style="font-size:.6rem">刷新</button><button id="ht_log_copy" style="font-size:.6rem">复制</button><button id="ht_log_close" style="font-size:.6rem">关闭</button></div></div>`);
+        const { el: toastEl, close } = createFixedToast('ht_log_toast', `<div style="pointer-events:all;width:90vw;max-width:420px"><div class="title" style="margin:0 0 6px;display:flex;align-items:center;justify-content:space-between">运行日志<span id="ht_log_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div><textarea id="ht_log_area" readonly style="width:100%;height:40vh;font-size:.56rem;line-height:1.5;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:6px;color:inherit;resize:none;"></textarea><div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px"><button id="ht_log_refresh" style="font-size:.6rem">刷新</button><button id="ht_log_copy" style="font-size:.6rem">复制</button><button id="ht_log_close" style="font-size:.6rem">关闭</button></div></div>`);
         const area = toastEl.querySelector('#ht_log_area');
         area.value = logText; area.scrollTop = area.scrollHeight;
+        toastEl.querySelector('#ht_log_qq').onclick = async () => { await copyToClipboard(QQ_GROUP); createToast('群号已复制', 'green'); };
         toastEl.querySelector('#ht_log_refresh').onclick = async () => { area.value = await fetchLog(); area.scrollTop = area.scrollHeight; };
         toastEl.querySelector('#ht_log_copy').onclick = async () => { await copyToClipboard(area.value); createToast('日志已复制', 'green'); };
         toastEl.querySelector('#ht_log_close').onclick = () => close();
@@ -1155,15 +1156,16 @@ cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup
     };
 
     // ─── help ─────────────────────────────────────────────────────────────────
-    const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>诊断</b><br>自动检测常见问题，可一键上报给作者分析。遇到问题请加QQ群 <b>${QQ_GROUP}</b> 反馈交流。`;
+    const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>诊断</b><br>检测常见问题，可一键上报诊断结果给作者分析。`;
 
     const showHelp = () => {
         const { el: toastEl, close } = createFixedToast('ht_help_toast', `
             <div style="pointer-events:all;width:80vw;max-width:300px">
-                <div class="title" style="margin:0">使用说明</div>
+                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">使用说明<span id="ht_help_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div>
                 <div style="margin:10px 0;font-size:.64rem;line-height:1.6">${HELP_TEXT}</div>
                 <div style="text-align:right"><button style="font-size:.62rem" id="ht_help_dismiss">关闭</button></div>
             </div>`);
+        toastEl.querySelector('#ht_help_qq').onclick = async () => { await copyToClipboard(QQ_GROUP); createToast('群号已复制', 'green'); };
         toastEl.querySelector('#ht_help_dismiss').onclick = () => close();
     };
 

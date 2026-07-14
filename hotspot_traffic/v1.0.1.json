@@ -1,0 +1,7 @@
+{
+    "rev": "1.0.2",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.2",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.0.2",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v1.0.2.js",
+    "notes": "1.修复：重启插件后热点合计残留\n2.优化：新版本更新逻辑\n\n注意：本次更新完成后请手动重新启用插件，以消除\"热点合计\"的\"偏差\"和\"设备合计\"的\"未归属\""
+}

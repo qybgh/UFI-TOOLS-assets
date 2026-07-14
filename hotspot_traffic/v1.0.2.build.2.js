@@ -277,7 +277,7 @@ mv ${sq(TRAFFIC_NEW)} ${sq(TRAFFIC_BIN_FILE)} && mv ${sq(DIAG_NEW)} ${sq(DIAG_BI
         const unattrCls = (unattrSigned < 0) ? 'ht-status-alert' : (unattrAbs <= 1048576) ? 'ht-status-ok' : (unattrPct > 30) ? 'ht-status-warn' : 'ht-status-ok';
         const deviceTxBytes = deviceList.reduce((s, d) => s + (d.txBytes || 0), 0);
         const deviceRxBytes = deviceList.reduce((s, d) => s + (d.rxBytes || 0), 0);
-        return { sysDelta, iptTotal, iptV4, iptV6, onlineCount, deviceCount, deviceTotalBytes, useTether, sysTxDelta, sysRxDelta, diffSigned, diffPct, unattrSigned, diffCls, unattrCls, deviceTxBytes, deviceRxBytes };
+        return { sysDelta, iptTotal, iptV4, iptV6, onlineCount, deviceCount, deviceTotalBytes, useTether, sysTxDelta, sysRxDelta, diffSigned, unattrSigned, diffCls, unattrCls, deviceTxBytes, deviceRxBytes };
     };
 
     const resolveDisplayName = (device) => {
@@ -611,8 +611,6 @@ rm -rf ${sq(DATA_DIR)}
                 refreshDataArea();
             }, 5000);
         }
-        const btn = document.querySelector('#ht_auto_data');
-        if (btn) btn.textContent = state.autoData ? '停止刷新' : '自动刷新';
     };
 
     // ─── style ────────────────────────────────────────────────────────────────

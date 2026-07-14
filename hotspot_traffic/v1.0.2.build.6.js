@@ -79,14 +79,16 @@
                 `app_ver=${ufiData?.app_ver || ''}`, `net_type=${ufiData?.network_type || ''}`,
                 `carrier=${ufiData?.network_provider || ''}`, `ipv6=${ufiData?.ipv6_wan_ipaddr ? '1' : '0'}`,
             ];
-            const hwR = await run(`echo "__USB__"; cat /sys/class/android_usb/android0/state 2>/dev/null; echo "__CPU__"; grep -m1 'Hardware' /proc/cpuinfo 2>/dev/null | awk -F: '{gsub(/^[ \\t]+/,"",\$2); print \$2}'; echo "__PLAT__"; getprop ro.board.platform 2>/dev/null`, 3000);
+            const hwR = await run(`echo "__USB__"; cat /sys/class/android_usb/android0/state 2>/dev/null; echo "__CPU__"; grep -m1 'Hardware' /proc/cpuinfo 2>/dev/null | awk -F: '{gsub(/^[ \\t]+/,"",\$2); print \$2}'; echo "__PLAT__"; getprop ro.board.platform 2>/dev/null; echo "__UP__"; awk '{printf "%d", \$1}' /proc/uptime`, 3000);
             const hwTxt = String(hwR?.content || '');
             const usbState = hwTxt.includes('__USB__') ? hwTxt.split('__USB__')[1].split('__CPU__')[0].trim() : '';
             const cpuModel = hwTxt.includes('__CPU__') ? hwTxt.split('__CPU__')[1].split('__PLAT__')[0].trim() : '';
-            const platform = hwTxt.includes('__PLAT__') ? hwTxt.split('__PLAT__')[1].trim() : '';
+            const platform = hwTxt.includes('__PLAT__') ? hwTxt.split('__PLAT__')[1].split('__UP__')[0].trim() : '';
+            const uptime = hwTxt.includes('__UP__') ? hwTxt.split('__UP__')[1].trim() : '';
             if (usbState) infoArr.push(`usb=${usbState}`);
             if (cpuModel) infoArr.push(`cpu=${cpuModel}`);
             if (platform) infoArr.push(`platform=${platform}`);
+            if (uptime) infoArr.push(`uptime=${uptime}s`);
             return infoArr.join('\n');
         } catch { return null; }
     };

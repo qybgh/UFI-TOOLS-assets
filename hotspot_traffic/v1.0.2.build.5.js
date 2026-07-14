@@ -96,7 +96,7 @@
     const _initFallback = async () => {
         if (!_PREV_VER || _manifest) return;
         try {
-            const _fbUrl = GH_VERSION_BASE + 'latest.json?_=' + Date.now();
+            const _fbUrl = GH_VERSION_BASE + '_latest.json?_=' + Date.now();
             const _fbR = await run(`curl -sL --connect-timeout 8 --max-time 15 ${sq(_fbUrl)}`, 20000);
             const _fbT = String(_fbR?.content || '').trim();
             if (_fbT && _fbT[0] === '{') {
@@ -115,7 +115,7 @@
             if (mode === 'init') {
                 url = _PREV_VER
                     ? GH_VERSION_BASE + 'v' + _PREV_VER + '.json'
-                    : GH_VERSION_BASE + 'latest.json?_=' + Date.now();
+                    : GH_VERSION_BASE + '_latest.json?_=' + Date.now();
             } else {
                 if (!state._deviceVersion) return;
                 url = GH_VERSION_BASE + 'v' + state._deviceVersion + '.json';

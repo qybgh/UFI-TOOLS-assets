@@ -11,6 +11,7 @@
     }
 
     // ─── constants ────────────────────────────────────────────────────────────
+    const _PREV_VER = '1.0.2';
     const NAME = 'hotspot_traffic';
     const MODAL = 'hotspot_traffic_panel';
     const STYLE = 'hotspot_traffic_style';
@@ -41,7 +42,6 @@
     const _PS = `<!-- [${_M}_START]`;
     const _PE = `<!-- [${_M}_END]`;
     const _SIG = '@@HT_PLUGIN_ID:7f3a9c@@';
-    const _PREV_VER = '';
     let _dataEvtBound = false;
 
     // ─── utils ────────────────────────────────────────────────────────────────
@@ -283,7 +283,7 @@ mv ${sq(TRAFFIC_NEW)} ${sq(TRAFFIC_BIN_FILE)} && mv ${sq(DIAG_NEW)} ${sq(DIAG_BI
     const resolveDisplayName = (device) => {
         const customName = getCustomName(device.mac);
         const hostname = (device.hostname || '').trim();
-        return customName || hostname || '未知设备';
+        return customName /* || hostname */ || '未知设备';
     };
 
     // ─── config read/write ────────────────────────────────────────────────────

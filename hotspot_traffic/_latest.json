@@ -1,6 +1,6 @@
 {
-    "rev": "1.0.2",
-    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.2",
+    "rev": "1.0.3",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.3",
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.0.2",
     "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v1.0.2.js"
 }

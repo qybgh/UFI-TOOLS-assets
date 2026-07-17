@@ -1,0 +1,7 @@
+{
+    "rev": "1.1.build.5",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.1.build.5",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.1.build.5",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v1.1.build.5.js",
+    "notes": "1.新增设备名称自动识别，包括苹果设备\n2.新增设备级拉黑&限速功能"
+}

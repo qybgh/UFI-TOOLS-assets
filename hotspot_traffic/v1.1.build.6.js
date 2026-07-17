@@ -1019,7 +1019,7 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
                 updateDiagBtn();
                 createToast('诊断超时或失败，请稍后重试', 'pink');
             }
-        }, 55000);
+        }, 95000);
     };
 
     let _lastReportTime = 0;

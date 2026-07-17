@@ -990,8 +990,8 @@ rm -rf ${sq(DATA_DIR)}
             const infoLines = await collectDeviceInfo();
             if (infoLines) await run(`printf '%s' ${sq(infoLines)} > ${sq(DEVICE_INFO_FILE)}; echo`);
         } catch {}
-        await run(`rm -f ${sq(DIAG_RESULT_FILE)} ${sq(DIAG_SH_FILE)} 2>/dev/null
-cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_PROC} >/dev/null 2>&1 &`, 5000);
+        await run(`rm -f ${sq(DIAG_RESULT_FILE)} 2>/dev/null
+cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_PROC} >/dev/null 2>&1 &`, 15000);
         closeLoading();
         createToast('诊断已启动，后台执行中...', 'green', 2000);
         const _diagPoll = setInterval(async () => {
@@ -1019,7 +1019,7 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
                 updateDiagBtn();
                 createToast('诊断超时或失败，请稍后重试', 'pink');
             }
-        }, 35000);
+        }, 55000);
     };
 
     let _lastReportTime = 0;

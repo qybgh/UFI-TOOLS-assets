@@ -1270,6 +1270,7 @@ ${START_PROC}
                 else {
                     const probeR = await run(`_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && grep -q stb_ /proc/"$_p"/cmdline 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
                     if (String(probeR?.content || '').includes('__ALIVE__')) {
+                        await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
                         await readStatus();
                         if (state.installed) await loadData();
                         renderIntoPanel();

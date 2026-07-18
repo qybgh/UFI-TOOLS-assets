@@ -65,9 +65,9 @@
         }
     };
 
-    const policySet = async (mac, type, kbps = 0) => {
+    const policySet = async (mac, type) => {
         await run(`[ -s ${sq(POLICY_FILE)} ] || printf '{}' > ${sq(POLICY_FILE)}`);
-        const r = await run(`timeout 2s ${sq(JQ)} -c --arg m ${sq(mac)} --arg t ${sq(type)} --argjson k ${kbps} '.[$m]={"type":$t,"kbps":$k}' ${sq(POLICY_FILE)} > ${sq(POLICY_FILE)}.tmp && mv ${sq(POLICY_FILE)}.tmp ${sq(POLICY_FILE)} && touch ${sq(POLICY_TRIGGER)} && echo __OK__ || { rm -f ${sq(POLICY_FILE)}.tmp; echo __FAIL__; }`);
+        const r = await run(`timeout 2s ${sq(JQ)} -c --arg m ${sq(mac)} --arg t ${sq(type)} '.[$m]={"type":$t}' ${sq(POLICY_FILE)} > ${sq(POLICY_FILE)}.tmp && mv ${sq(POLICY_FILE)}.tmp ${sq(POLICY_FILE)} && touch ${sq(POLICY_TRIGGER)} && echo __OK__ || { rm -f ${sq(POLICY_FILE)}.tmp; echo __FAIL__; }`);
         return { success: (r?.content || '').includes('__OK__'), content: r?.content };
     };
 
@@ -78,12 +78,12 @@
     };
 
     const loadPolicyMap = async () => {
-        const r = await run(`timeout 1s ${sq(JQ)} -r 'to_entries[] | "\\(.key)|\\(.value.type // "normal")|\\(.value.kbps // 0)"' ${sq(POLICY_FILE)} 2>/dev/null || echo ''`, 3000);
+        const r = await run(`timeout 1s ${sq(JQ)} -r 'to_entries[] | "\\(.key)|\\(.value.type // "normal")"' ${sq(POLICY_FILE)} 2>/dev/null || echo ''`, 3000);
         const map = {};
         String(r?.content || '').trim().split('\n').forEach(line => {
             if (!line) return;
-            const [mac, type, kbps] = line.split('|');
-            if (mac && type && type !== 'normal') map[mac] = { type, kbps: parseInt(kbps) || 0 };
+            const [mac, type] = line.split('|');
+            if (mac && type && type !== 'normal') map[mac] = { type };
         });
         state.policyMap = map;
     };
@@ -585,10 +585,8 @@ rm -rf ${sq(DATA_DIR)}
                 if (si1) si1.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))}</div><div class="ht-summary-lbl">热点合计 <span style="font-size:.48rem;opacity:.6">v4:${esc(htFormatBytes(m.iptV4))} v6:${esc(htFormatBytes(m.iptV6))}</span></div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></div>`;
                 const _pv = Object.values(state.policyMap);
                 const blCount = _pv.filter(p => p.type === 'blacklist').length;
-                const thCount = _pv.filter(p => p.type === 'throttle').length;
                 const _pp = [];
                 if (blCount) _pp.push(`拉黑 <span class="ht-status-alert">${blCount}</span>`);
-                if (thCount) _pp.push(`限速 <span class="ht-status-warn">${thCount}</span>`);
                 const polInfo = _pp.length ? `<div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">${_pp.join(' · ')}</div>` : '';
                 if (si2) si2.innerHTML = `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div><div class="ht-summary-lbl">接入设备</div>${polInfo}`;
                 if (si3) si3.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))}${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}</div><div class="ht-summary-lbl">设备合计</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></div>`;
@@ -629,7 +627,7 @@ rm -rf ${sq(DATA_DIR)}
                     const polEl = tr.querySelector('[data-ht="pol"]');
                     if (polEl) {
                         const pol = state.policyMap[device.mac];
-                        const wantBg = pol ? (pol.type === 'blacklist' ? '#f87171' : '#fbbf24') : '';
+                        const wantBg = pol?.type === 'blacklist' ? '#f87171' : '';
                         if (polEl.style.background !== wantBg) {
                             polEl.style.display = pol ? 'inline-block' : 'none';
                             polEl.style.background = wantBg;
@@ -760,7 +758,7 @@ rm -rf ${sq(DATA_DIR)}
         const isMe = device.ip && device.ip === state._clientIp;
         const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
         const pol = state.policyMap[device.mac];
-        const polBg = pol ? (pol.type === 'blacklist' ? '#f87171' : '#fbbf24') : '';
+        const polBg = pol?.type === 'blacklist' ? '#f87171' : '';
         const polDot = `<span data-ht="pol" style="display:${pol ? 'inline-block' : 'none'};width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;opacity:.7${polBg ? ';background:' + polBg : ''}"></span>`;
         return `<tr data-mac="${safeMac}">
         <td style="opacity:.4;font-size:.54rem;width:18px;text-align:center;" data-ht="idx">${index + 1}</td>
@@ -779,11 +777,10 @@ rm -rf ${sq(DATA_DIR)}
     };
 
     const showDeviceModal = async (mac, displayName, ip) => {
-        const _r = await run(`timeout 1s ${sq(JQ)} -r --arg m ${sq(mac)} '.[$m] // {"type":"normal","kbps":0}' ${sq(POLICY_FILE)} 2>/dev/null || echo '{"type":"normal","kbps":0}'`);
-        let curPolicy = {type: 'normal', kbps: 0};
+        const _r = await run(`timeout 1s ${sq(JQ)} -r --arg m ${sq(mac)} '.[$m] // {"type":"normal"}' ${sq(POLICY_FILE)} 2>/dev/null || echo '{"type":"normal"}'`);
+        let curPolicy = {type: 'normal'};
         try { curPolicy = JSON.parse((_r?.content || '').trim()); } catch (e) { console.warn('[HT] parse policy json failed:', e, _r?.content); }
         const curPol = curPolicy.type || 'normal';
-        const curKbps = curPolicy.kbps || 0;
         const customName = getCustomName(mac) || '';
         const masked = maskMac(mac);
         const content = `
@@ -800,13 +797,6 @@ rm -rf ${sq(DATA_DIR)}
       <div style="display:flex;flex-direction:column;gap:8px;font-size:.7rem;color:#e2e8f0">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="normal" ${curPol==='normal'?'checked':''} style="accent-color:#667eea"> 正常（无限制）</label>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="blacklist" ${curPol==='blacklist'?'checked':''} style="accent-color:#667eea"> 拉黑（禁止联网）</label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="throttle" ${curPol==='throttle'?'checked':''} style="accent-color:#667eea"> 限速
-          <input type="number" id="ht_speed_val" min="1" max="99999" style="width:60px;padding:3px 6px;background:#1e2030;border:1px solid #334155;border-radius:4px;color:#e2e8f0;font-size:.65rem;text-align:center">
-          <select id="ht_speed_unit" style="padding:3px 6px;background:#1e2030;border:1px solid #334155;border-radius:4px;color:#e2e8f0;font-size:.65rem">
-            <option value="1">KB/s</option>
-            <option value="1024">MB/s</option>
-          </select>
-        </label>
       </div>`;
         const { id, el } = createModal({
             name: 'ht_device_modal',
@@ -819,14 +809,7 @@ rm -rf ${sq(DATA_DIR)}
                 const newName = el.querySelector('#ht_dev_name')?.value?.trim() || '';
                 const type = el.querySelector('input[name="pol"]:checked')?.value;
                 let policyOk = true;
-                if (type === 'throttle') {
-                    const speedVal = parseInt(el.querySelector('#ht_speed_val')?.value) || 0;
-                    const speedUnit = parseInt(el.querySelector('#ht_speed_unit')?.value) || 1;
-                    const kbps = speedVal * speedUnit;
-                    if (kbps <= 0) { createToast('请输入限速值', 'red', 2000); return false; }
-                    const r = await policySet(mac, 'throttle', kbps);
-                    if (!r?.success) policyOk = false;
-                } else if (type === 'normal') {
+                if (type === 'normal') {
                     const r = await policyRemove(mac);
                     if (!r?.success) policyOk = false;
                 } else if (type) {
@@ -846,12 +829,6 @@ rm -rf ${sq(DATA_DIR)}
         const macEl = el.querySelector('.ht-mac-toggle');
         if (macEl) macEl.onclick = () => { macEl.textContent = macEl.textContent === macEl.dataset.full ? macEl.dataset.masked : macEl.dataset.full; };
         el.querySelector('#ht_dev_name_clear')?.addEventListener('click', () => { el.querySelector('#ht_dev_name').value = ''; });
-        if (curPol === 'throttle' && curKbps > 0) {
-            const valEl = el.querySelector('#ht_speed_val');
-            const unitEl = el.querySelector('#ht_speed_unit');
-            if (curKbps >= 1024 && curKbps % 1024 === 0) { valEl.value = String(curKbps / 1024); unitEl.value = '1024'; }
-            else { valEl.value = String(curKbps); unitEl.value = '1'; }
-        }
         showModal(id);
     };
 
@@ -871,7 +848,7 @@ rm -rf ${sq(DATA_DIR)}
             summaryHtml = `<div class="ht-summary-grid">
             <div class="ht-summary-item" data-ht="si_0"><div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}</div><div class="ht-summary-lbl">系统增量</div></div>
             <div class="ht-summary-item" data-ht="si_1"><div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))}</div><div class="ht-summary-lbl">热点合计 <span style="font-size:.48rem;opacity:.6">v4:${esc(htFormatBytes(m.iptV4))} v6:${esc(htFormatBytes(m.iptV6))}</span></div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></div></div>
-            ${(() => { const _pv = Object.values(state.policyMap); const blCount = _pv.filter(p => p.type === 'blacklist').length; const thCount = _pv.filter(p => p.type === 'throttle').length; const _pp = []; if (blCount) _pp.push(`拉黑 <span class="ht-status-alert">${blCount}</span>`); if (thCount) _pp.push(`限速 <span class="ht-status-warn">${thCount}</span>`); const polInfo = _pp.length ? `<div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">${_pp.join(' · ')}</div>` : ''; return `<div class="ht-summary-item" data-ht="si_2"><div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div><div class="ht-summary-lbl">接入设备</div>${polInfo}</div>`; })()}
+            ${(() => { const _pv = Object.values(state.policyMap); const blCount = _pv.filter(p => p.type === 'blacklist').length; const _pp = []; if (blCount) _pp.push(`拉黑 <span class="ht-status-alert">${blCount}</span>`); const polInfo = _pp.length ? `<div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">${_pp.join(' · ')}</div>` : ''; return `<div class="ht-summary-item" data-ht="si_2"><div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div><div class="ht-summary-lbl">接入设备</div>${polInfo}</div>`; })()}
             <div class="ht-summary-item" data-ht="si_3"><div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))}${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}</div><div class="ht-summary-lbl">设备合计</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></div></div>
           </div>${zeroWarn}`;
         } else {

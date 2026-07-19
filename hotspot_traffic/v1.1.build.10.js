@@ -103,6 +103,7 @@
         _deviceVersion: '',
         _clientIp: '',
         policyMap: {},
+        _lastMtimeKey: '',
     };
 
     const collectDeviceInfo = async () => {
@@ -684,9 +685,14 @@ rm -rf ${sq(DATA_DIR)}
         state.autoData = Boolean(enabled && state.installed);
         stopAutoData();
         if (state.autoData) {
-            state.autoDataTimer = setInterval(() => {
+            state.autoDataTimer = setInterval(async () => {
                 if (document.querySelector('#collapse_ht')?.dataset?.name !== 'open' || !state.installed || !state.autoData) { setAutoData(false); return; }
-                refreshDataArea();
+                const mtR = await run(`stat -c %Y ${sq(DATA_FILE)} 2>/dev/null || echo 0; stat -c %Y ${sq(STATION_FILE)} 2>/dev/null || echo 0`, 2000);
+                const mtKey = String(mtR?.content || '').trim();
+                if (mtKey !== state._lastMtimeKey || !state.dataCache) {
+                    state._lastMtimeKey = mtKey;
+                    refreshDataArea();
+                }
             }, 5000);
         }
     };
@@ -1285,7 +1291,7 @@ ${START_PROC}
     };
 
     // ─── help ─────────────────────────────────────────────────────────────────
-    const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。点击设备右侧 ✎ 可设置自定义名称、拉黑或限速策略。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>诊断</b><br>检测常见问题，可一键上报诊断结果给作者分析。`;
+    const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。点击设备右侧 ✎ 可设置自定义名称或拉黑策略。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>诊断</b><br>检测常见问题，可一键上报诊断结果给作者分析。`;
 
     const showHelp = () => {
         const { el: toastEl, close } = createFixedToast('ht_help_toast', `

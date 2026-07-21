@@ -1,5 +1,5 @@
 {
-    "rev": "2.0.build.9",
+    "rev": "2.0.build.10",
     "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v2.0.build.10",
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v2.0.build.5",
     "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/js_v2.0.build.5",

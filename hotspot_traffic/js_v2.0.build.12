@@ -329,7 +329,7 @@ mv ${sq(TRAFFIC_NEW)} ${sq(TRAFFIC_BIN_FILE)} && mv ${sq(DIAG_NEW)} ${sq(DIAG_BI
 echo __BOOT__
 timeout 2s awk '{print}' ${sq(BOOT_SH_FILE)} 2>/dev/null || true
 echo __PROC__
-_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && grep -q stb_ /proc/"$_p"/cmdline 2>/dev/null && echo running=1 || echo running=0
+_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); _ep=$(timeout 1s awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null); { [ -n "$_ep" ] && kill -0 "$_ep" 2>/dev/null || [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; } && echo running=1 || echo running=0
 echo __DATA__
 timeout 3s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null || true
 echo __VER__
@@ -1251,7 +1251,7 @@ ${START_PROC}
             try {
                 if (state.installed) { await uninstall(); renderIntoPanel(); }
                 else {
-                    const probeR = await run(`_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && grep -q stb_ /proc/"$_p"/cmdline 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
+                    const probeR = await run(`_ep=$(timeout 1s awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null); _p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); { [ -n "$_ep" ] && kill -0 "$_ep" 2>/dev/null || [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; } && echo __ALIVE__ || echo __DEAD__`, 5000);
                     if (String(probeR?.content || '').includes('__ALIVE__')) {
                         await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
                         await readStatus();

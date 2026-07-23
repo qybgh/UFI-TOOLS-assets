@@ -374,9 +374,7 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
     const KILL_PROCS = `
 _p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
 if [ -n "$_p" ]; then
-kill "$_p" 2>/dev/null
-sleep 1
-pkill -9 -P "$_p" 2>/dev/null
+kill -9 -"$_p" 2>/dev/null
 kill -9 "$_p" 2>/dev/null
 fi
 rm -f ${sq(PID_FILE)}

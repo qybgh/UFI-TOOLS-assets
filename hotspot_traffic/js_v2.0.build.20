@@ -374,10 +374,16 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
     const KILL_PROCS = `
 _p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
 if [ -n "$_p" ]; then
-kill -9 -"$_p" 2>/dev/null
+kill -15 "$_p" 2>/dev/null
+_i=0; while kill -0 "$_p" 2>/dev/null && [ "$_i" -lt 15 ]; do sleep 0.1; _i=$((_i+1)); done
+_ep=$(awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null)
+[ -n "$_ep" ] && kill -9 "$_ep" 2>/dev/null
+_tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
+[ -n "$_tp" ] && kill -9 "$_tp" 2>/dev/null
 kill -9 "$_p" 2>/dev/null
 fi
-rm -f ${sq(PID_FILE)}
+pkill -9 -f 'ht_engine.*-data-dir.*/hotspot_traffic' 2>/dev/null
+rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
 rm -rf ${sq(DATA_DIR + '/.lock_dir')}`.trim();
 
     const START_PROC = `cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`.trim();

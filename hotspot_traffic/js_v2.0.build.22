@@ -919,6 +919,7 @@ rm -rf ${sq(DATA_DIR)}
     const clearDiagState = () => {
         state.diagStatus = 'idle';
         state.diagResult = null;
+        localStorage.setItem(LS_KEY + 'diagCooldownUntil', String(Date.now() + DIAG_COOLDOWN));
     };
 
     const updateDiagBtn = () => {
@@ -934,6 +935,13 @@ rm -rf ${sq(DATA_DIR)}
         updateDiagBtn();
         const _resetDiag = () => { state.diagStatus = 'idle'; updateDiagBtn(); };
         try { await readStatus(); } catch (e) { state.summary = null; console.warn('[HT] readStatus in diag:', e); }
+        const _cooldownUntil = parseInt(localStorage.getItem(LS_KEY + 'diagCooldownUntil') || '0', 10);
+        if (Date.now() < _cooldownUntil) {
+            const sec = Math.floor((_cooldownUntil - Date.now()) / 1000);
+            const t = sec >= 60 ? `${Math.floor(sec / 60)}分${sec % 60 ? sec % 60 + '秒' : ''}` : `${sec}秒`;
+            _resetDiag();
+            return createToast(`请等待${t}后再诊断`, 'pink');
+        }
         if (state.summary && state.summary.scriptStartAt) {
             const startMs = new Date(state.summary.scriptStartAt).getTime();
             if (!Number.isFinite(startMs)) { _resetDiag(); return createToast('插件数据尚未就绪，请等待采集完成后再诊断', 'pink'); }
@@ -944,7 +952,7 @@ rm -rf ${sq(DATA_DIR)}
                 _resetDiag();
                 return createToast(`插件当前启动${t}，请等待至少5分钟后再诊断`, 'pink');
             }
-        } else {
+        } else if (!state.summary) {
             _resetDiag();
             return createToast('插件数据尚未就绪，请等待采集完成后再诊断', 'pink');
         }

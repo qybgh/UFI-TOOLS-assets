@@ -381,11 +381,22 @@ _tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
 [ -n "$_tp" ] && kill -9 "$_tp" 2>/dev/null
 kill -9 "$_p" 2>/dev/null
 fi
-pkill -9 -f 'ht_engine.*-data-dir.*/hotspot_traffic' 2>/dev/null
 rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
 rm -rf ${sq(DATA_DIR + '/.lock_dir')}`.trim();
 
     const START_PROC = `cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`.trim();
+
+    let _recoverTried = false;
+    const recoverDaemonOnce = async () => {
+        if (_recoverTried || state.installed) return;
+        _recoverTried = true;
+        const r = await run(`grep -q ${sq(NAME)} ${sq(BOOT_SH_FILE)} 2>/dev/null || exit 0; _p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
+        if (!String(r?.content || '').includes('__DEAD__')) return;
+        await run(START_PROC, 10000);
+        await wait(1500);
+        await readStatus();
+        if (state.installed) createToast('检测到后台服务已停止，已自动恢复', 'green');
+    };
 
     const IPT_CLEANUP = `iptables -w 5 -t mangle -D FORWARD -j HT_DEV_TX 2>/dev/null
 iptables -w 5 -t mangle -F HT_DEV_TX 2>/dev/null
@@ -490,7 +501,13 @@ rm -rf ${sq(DATA_DIR)}
     };
 
     // ─── data ─────────────────────────────────────────────────────────────────
-    const loadData = async () => {
+    const loadData = async (preloaded) => {
+        if (preloaded && preloaded.devices && typeof preloaded.devices === 'object') {
+            state.dataCache = preloaded;
+            state.lastUpdated = preloaded.updatedAt || '';
+            state.summary = preloaded.summary || null;
+            return;
+        }
         try {
             const result = await run(`[ -f ${sq(DATA_FILE)} ] && timeout 3s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null || echo '{}'`, 5000);
             const raw = String(result?.content ?? '').trim();
@@ -515,27 +532,27 @@ rm -rf ${sq(DATA_DIR)}
     };
 
     let dataLoading = false;
-    const refreshDataArea = async () => {
+    const refreshDataArea = async (preloaded) => {
         const area = document.querySelector(`#${MODAL} #ht_data_area`);
         if (!area) return;
         if (area.querySelector('[data-ht]')) {
-            await patchDataArea();
+            await patchDataArea(preloaded);
             return;
         }
         if (dataLoading) return;
         dataLoading = true;
         try {
-            await loadData();
+            await loadData(preloaded);
             area.innerHTML = renderDataArea();
             initDataDelegate();
         } finally { dataLoading = false; }
     };
 
-    const patchDataArea = async () => {
+    const patchDataArea = async (preloaded) => {
         if (dataLoading) return;
         dataLoading = true;
         try {
-            await loadData();
+            await loadData(preloaded);
             const el = document.querySelector(`#${MODAL} #ht_data_area`);
             if (!el || !state.dataCache) return;
 
@@ -655,12 +672,19 @@ rm -rf ${sq(DATA_DIR)}
         if (state.autoData) {
             state.autoDataTimer = setInterval(async () => {
                 if (document.querySelector('#collapse_ht')?.dataset?.name !== 'open' || !state.installed || !state.autoData) { setAutoData(false); return; }
-                const mtR = await run(`stat -c %Y ${sq(DATA_FILE)} 2>/dev/null || echo 0`, 2000);
-                const mtKey = String(mtR?.content || '').trim();
-                if (mtKey !== state._lastMtimeKey || !state.dataCache) {
-                    state._lastMtimeKey = mtKey;
-                    refreshDataArea();
+                const r = await run(`_mt=$(stat -c %Y ${sq(DATA_FILE)} 2>/dev/null || echo 0)
+echo "$_mt"
+if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null; fi`, 5000);
+                const raw = String(r?.content || '');
+                const nl = raw.indexOf('\n');
+                const mtKey = (nl >= 0 ? raw.slice(0, nl) : raw).trim();
+                const body = nl >= 0 ? raw.slice(nl + 1).trim() : '';
+                if (mtKey === state._lastMtimeKey && state.dataCache) return;
+                state._lastMtimeKey = mtKey;
+                if (body) {
+                    try { refreshDataArea(JSON.parse(body)); return; } catch (e) { console.warn('[HT] poll parse:', e); }
                 }
+                refreshDataArea();
             }, 5000);
         }
     };
@@ -884,7 +908,6 @@ rm -rf ${sq(DATA_DIR)}
     const clearDiagState = () => {
         state.diagStatus = 'idle';
         state.diagResult = null;
-        localStorage.setItem(LS_KEY + 'diagCooldownUntil', String(Date.now() + DIAG_COOLDOWN));
     };
 
     const updateDiagBtn = () => {
@@ -900,13 +923,6 @@ rm -rf ${sq(DATA_DIR)}
         updateDiagBtn();
         const _resetDiag = () => { state.diagStatus = 'idle'; updateDiagBtn(); };
         try { await readStatus(); } catch (e) { state.summary = null; console.warn('[HT] readStatus in diag:', e); }
-        const _cooldownUntil = parseInt(localStorage.getItem(LS_KEY + 'diagCooldownUntil') || '0', 10);
-        if (Date.now() < _cooldownUntil) {
-            const sec = Math.floor((_cooldownUntil - Date.now()) / 1000);
-            const t = sec >= 60 ? `${Math.floor(sec / 60)}分${sec % 60 ? sec % 60 + '秒' : ''}` : `${sec}秒`;
-            _resetDiag();
-            return createToast(`请等待${t}后再诊断`, 'pink');
-        }
         if (state.summary && state.summary.scriptStartAt) {
             const startMs = new Date(state.summary.scriptStartAt).getTime();
             if (!Number.isFinite(startMs)) { _resetDiag(); return createToast('插件数据尚未就绪，请等待采集完成后再诊断', 'pink'); }
@@ -1324,6 +1340,7 @@ ${START_PROC}
     collapseGen('#collapse_ht_btn', '#collapse_ht', '#collapse_ht', async (newVal) => {
         if (newVal === 'open') {
             await readStatus();
+            await recoverDaemonOnce();
             await recoverPendingUpdate();
             await restoreDiagState();
             if (state.installed) await loadData();
@@ -1346,6 +1363,7 @@ ${START_PROC}
                     await readStatus();
                 }
             }
+            await recoverDaemonOnce();
             await recoverPendingUpdate();
             await restoreDiagState();
             if (state.installed) await loadData();

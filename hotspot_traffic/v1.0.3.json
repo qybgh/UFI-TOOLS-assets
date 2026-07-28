@@ -1,0 +1,7 @@
+{
+    "rev": "1.0.4",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/guard_v1.0.3",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/diag_v1.0.2",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v1.0.2.js",
+    "notes": "1.更新功能优化\n2.预告：近期将发布v2.0版本，将新增全设备通用名称自动识别、设备级拉黑功能、全新架构cpu占用极低\n\n提醒：本次更新完成后需刷新页面后重新启用插件，以消除历史版本残留数据"
+}

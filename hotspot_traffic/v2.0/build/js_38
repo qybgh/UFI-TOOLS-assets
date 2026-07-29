@@ -255,6 +255,9 @@ mv ${sq(TRAFFIC_NEW)} ${sq(TRAFFIC_BIN_FILE)} && mv ${sq(DIAG_NEW)} ${sq(DIAG_BI
         return sign + abs + ' B';
     };
 
+    const htFormatRate = (bps) => htFormatBytes(bps) + '/s';
+    const renderTrafficRateCell = (device, total, tx, rx) => `<span>${esc(htFormatBytes(total))} <span style="font-size:.48rem;opacity:.7;white-space:nowrap">↑${esc(htFormatBytes(tx))} ↓${esc(htFormatBytes(rx))}</span></span> <span class="ht-rate-seg" style="font-size:.48rem;opacity:.85;white-space:nowrap"><span class="ht-up">↑${esc(htFormatRate(device.txRateBps))}</span> <span class="ht-down">↓${esc(htFormatRate(device.rxRateBps))}</span></span>`;
+
     const maskMac = (mac) => {
         if (!mac || typeof mac !== 'string') return mac || '';
         const parts = mac.split(':');
@@ -529,20 +532,22 @@ rm -rf ${sq(DATA_DIR)}
                 const si1 = el.querySelector('[data-ht="si_1"]');
                 const si2 = el.querySelector('[data-ht="si_2"]');
                 const si3 = el.querySelector('[data-ht="si_3"]');
-                if (si0) si0.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}</div><div class="ht-summary-lbl">系统增量</div>`;
-                if (si1) si1.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))}</div><div class="ht-summary-lbl">热点合计 <span style="font-size:.48rem;opacity:.6">v4:${esc(htFormatBytes(m.iptV4))} v6:${esc(htFormatBytes(m.iptV6))}</span></div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></div>`;
+                if (si0) si0.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}</div>${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}<div class="ht-summary-lbl">系统增量</div>`;
+                if (si1) si1.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))} <span style="font-size:.48rem;opacity:.7">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap">v4:<span class="ht-up">${esc(htFormatBytes(m.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(m.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div>`;
                 const _pv = Object.values(state.policyMap);
                 const blCount = _pv.filter(p => p.type === 'blacklist').length;
-                const _pp = [];
-                if (blCount) _pp.push(`拉黑 <span class="ht-status-alert">${blCount}</span>`);
-                const polInfo = _pp.length ? `<div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">${_pp.join(' · ')}</div>` : '';
-                if (si2) si2.innerHTML = `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div><div class="ht-summary-lbl">接入设备</div>${polInfo}`;
-                if (si3) si3.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))}${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}</div><div class="ht-summary-lbl">设备合计</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></div>`;
+                if (si2) si2.innerHTML = `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${blCount ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">拉黑 <span class="ht-status-alert">${blCount}</span></div>` : ''}<div class="ht-summary-lbl">接入设备</div>`;
+                if (si3) si3.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div>`;
             }
 
             const tbody = el.querySelector('tbody');
             if (!tbody) {
                 if (deviceList.length > 0) { el.innerHTML = renderDataArea(); initDataDelegate(); }
+                return;
+            }
+
+            if (tbody.querySelector('tr') && (!tbody.querySelector('[data-ht="tf"]') || !tbody.querySelector('td:nth-child(2) > [data-edit-mac]') || !tbody.querySelector('td:nth-child(5)'))) {
+                tbody.innerHTML = deviceList.map((d, i) => renderDeviceRow(d, i)).join('');
                 return;
             }
 
@@ -569,9 +574,9 @@ rm -rf ${sq(DATA_DIR)}
                     const nameEl = tr.querySelector('[data-ht="name"]');
                     if (nameEl && nameEl.innerHTML !== nameHtml) nameEl.innerHTML = nameHtml;
                     p('ip', device.ip || '');
-                    p('tx', htFormatBytes(txBytes));
-                    p('rx', htFormatBytes(rxBytes));
-                    p('total', 'Σ ' + htFormatBytes(totalBytes));
+                    const tfEl = tr.querySelector('[data-ht="tf"]');
+                    const tfHtml = renderTrafficRateCell(device, totalBytes, txBytes, rxBytes);
+                    if (tfEl && tfEl.innerHTML !== tfHtml) tfEl.innerHTML = tfHtml;
                     const polEl = tr.querySelector('[data-ht="pol"]');
                     if (polEl) {
                         const pol = state.policyMap[device.mac];
@@ -653,9 +658,12 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
 
     // ─── style ────────────────────────────────────────────────────────────────
     const ensureStyle = () => {
-        if (document.getElementById(STYLE)) return;
-        const s = document.createElement('style');
-        s.id = STYLE;
+        let s = document.getElementById(STYLE);
+        if (!s) {
+            s = document.createElement('style');
+            s.id = STYLE;
+            document.head.appendChild(s);
+        }
         s.textContent = `
       #${MODAL} .ht-wrap{display:flex;flex-direction:column;gap:2px;font-size:.72rem;}
       #${MODAL} .ht-card{border:1px solid rgba(255,255,255,.08);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border-radius:12px;padding:8px 10px;}
@@ -673,13 +681,14 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-dot-green{background:#4ade80;box-shadow:0 0 4px rgba(74,222,128,.5);}
       #${MODAL} .ht-dot-gray{background:rgba(255,255,255,.25);}
       #${MODAL} .ht-tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
-      #${MODAL} .ht-tbl{width:100%;border-collapse:collapse;font-size:.62rem;}
+      #${MODAL} .ht-tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.62rem;}
       #${MODAL} .ht-tbl th{font-size:.54rem;opacity:.45;font-weight:500;text-align:left;padding:3px 4px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap;}
       #${MODAL} .ht-tbl td{padding:4px 4px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle;}
       #${MODAL} .ht-tbl tr:last-child td{border-bottom:none;}
       #${MODAL} .ht-tbl .ht-td-name{font-weight:600;display:flex;align-items:center;gap:3px;line-height:1.2;}
       #${MODAL} .ht-tbl .ht-td-meta{font-size:.52rem;opacity:.4;line-height:1.3;word-break:break-all;margin-top:1px;}
-      #${MODAL} .ht-tbl .ht-td-num{font-weight:600;white-space:nowrap;font-size:.6rem;}
+      #${MODAL} .ht-tbl .ht-td-num{font-weight:600;white-space:nowrap;font-size:.6rem;font-variant-numeric:tabular-nums;}
+      #${MODAL} .ht-rate-seg{display:inline;}
       #${MODAL} .ht-mac{cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.2);}
       #${MODAL} .ht-mac:hover{opacity:.85;}
       #${MODAL} .ht-edit-mini{background:rgba(102,126,234,.15);border:none;cursor:pointer;opacity:1;font-size:.6rem;padding:3px 6px;color:#a5b4fc;line-height:1;flex-shrink:0;border-radius:4px;transition:background .15s,color .15s;}
@@ -688,7 +697,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-up{color:#67e8f9;}
       #${MODAL} .ht-down{color:#86efac;}
       #${MODAL} .ht-total{color:rgba(255,255,255,.7);}
-      #${MODAL} .ht-summary-val .ht-up,#${MODAL} .ht-summary-val .ht-down{color:inherit;}
+      #${MODAL} .ht-summary-item .ht-up,#${MODAL} .ht-summary-item .ht-down{color:inherit;}
       #${MODAL} .ht-muted{color:rgba(255,255,255,.35);}
       #${MODAL} .ht-status-ok{color:#86efac;}
       #${MODAL} .ht-status-warn{color:#fdba74;}
@@ -703,8 +712,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-summary-lbl{font-size:.52rem;opacity:.45;line-height:1.25;}
       #${MODAL} .ht-diag-item{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:.58rem;line-height:1.35;word-break:break-all;}
       @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:2px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
+      @media(max-width:480px){#${MODAL} .ht-rate-seg{display:block;margin-top:1px;} #${MODAL} .ht-tbl td.ht-total{white-space:normal;}}
     `;
-        document.head.appendChild(s);
     };
 
     // ─── render ───────────────────────────────────────────────────────────────
@@ -723,17 +732,16 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const polDot = `<span data-ht="pol" style="display:${pol ? 'inline-block' : 'none'};width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;opacity:.7${polBg ? ';background:' + polBg : ''}"></span>`;
         return `<tr data-mac="${safeMac}">
         <td style="opacity:.4;font-size:.54rem;width:18px;text-align:center;" data-ht="idx">${index + 1}</td>
+        <td><button class="ht-edit-mini" data-edit-mac="${safeMac}" title="自定义名称">✎</button></td>
         <td>
           <div class="ht-td-name">
             <span class="ht-dot ${dotCls}" data-ht="dot"></span>
             ${polDot}<span data-ht="name">${esc(displayName)}${meTag}</span>
-            <button class="ht-edit-mini" data-edit-mac="${safeMac}" title="自定义名称">✎</button>
           </div>
           <div class="ht-td-meta"><span data-ht="ip">${esc(device.ip || '')}</span> · <span class="ht-mac" data-full-mac="${safeMac}" data-masked="1" title="点击查看完整 MAC">${esc(maskMac(device.mac || ''))}</span></div>
         </td>
-        <td class="ht-td-num"><span class="ht-up" data-ht="tx">${esc(htFormatBytes(txBytes))}</span></td>
-        <td class="ht-td-num"><span class="ht-down" data-ht="rx">${esc(htFormatBytes(rxBytes))}</span></td>
-        <td class="ht-td-num ht-total" data-ht="total">Σ ${esc(htFormatBytes(totalBytes))}</td>
+        <td class="ht-td-num ht-total" data-ht="tf">${renderTrafficRateCell(device, totalBytes, txBytes, rxBytes)}</td>
+        <td></td>
       </tr>`;
     };
 
@@ -793,7 +801,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         showModal(id);
     };
 
-    const renderUlDl = (tx, rx) => ` <span style="font-size:.48rem;opacity:.7"><span class="ht-up">↑${esc(htFormatBytes(tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(rx))}</span></span>`;
+    const renderUlDl = (tx, rx) => `<div style="font-size:.48rem;opacity:.7;white-space:nowrap"><span class="ht-up">↑${esc(htFormatBytes(tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(rx))}</span></div>`;
 
     const renderDataArea = () => {
         const installed = state.installed;
@@ -807,10 +815,10 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             const m = calcSummaryMetrics(summary, deviceList);
             const zeroWarn = (summary.zeroStreak >= 3 && installed) ? `<div class="ht-status-alert" style="font-size:.55rem;margin-top:4px;">热点合计持续为0，可能受硬件加速影响，建议点击「诊断」排查</div>` : '';
             summaryHtml = `<div class="ht-summary-grid">
-            <div class="ht-summary-item" data-ht="si_0"><div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}</div><div class="ht-summary-lbl">系统增量</div></div>
-            <div class="ht-summary-item" data-ht="si_1"><div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))}</div><div class="ht-summary-lbl">热点合计 <span style="font-size:.48rem;opacity:.6">v4:${esc(htFormatBytes(m.iptV4))} v6:${esc(htFormatBytes(m.iptV6))}</span></div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></div></div>
-            ${(() => { const _pv = Object.values(state.policyMap); const blCount = _pv.filter(p => p.type === 'blacklist').length; const _pp = []; if (blCount) _pp.push(`拉黑 <span class="ht-status-alert">${blCount}</span>`); const polInfo = _pp.length ? `<div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">${_pp.join(' · ')}</div>` : ''; return `<div class="ht-summary-item" data-ht="si_2"><div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div><div class="ht-summary-lbl">接入设备</div>${polInfo}</div>`; })()}
-            <div class="ht-summary-item" data-ht="si_3"><div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))}${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}</div><div class="ht-summary-lbl">设备合计</div><div style="font-size:.46rem;opacity:.45;margin-top:1px;line-height:1.3">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></div></div>
+            <div class="ht-summary-item" data-ht="si_0"><div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}</div>${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}<div class="ht-summary-lbl">系统增量</div></div>
+            <div class="ht-summary-item" data-ht="si_1"><div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))} <span style="font-size:.48rem;opacity:.7">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap">v4:<span class="ht-up">${esc(htFormatBytes(m.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(m.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div></div>
+            ${(() => { const _pv = Object.values(state.policyMap); const blCount = _pv.filter(p => p.type === 'blacklist').length; return `<div class="ht-summary-item" data-ht="si_2"><div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${blCount ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">拉黑 <span class="ht-status-alert">${blCount}</span></div>` : ''}<div class="ht-summary-lbl">接入设备</div></div>`; })()}
+            <div class="ht-summary-item" data-ht="si_3"><div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div></div>
           </div>${zeroWarn}`;
         } else {
             summaryHtml = `<div class="ht-empty" style="font-size:.58rem;">启用并等待首次采集后显示</div>`;
@@ -818,7 +826,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
 
         const devicesHtml = deviceList.length > 0
             ? `<div class="ht-tbl-wrap"><table class="ht-tbl">
-                <thead><tr><th style="width:18px;text-align:center;">#</th><th>设备</th><th>↑上传</th><th>↓下载</th><th>合计</th></tr></thead>
+                <thead><tr><th style="width:18px;text-align:center;">#</th><th style="width:26px;">操作</th><th>设备</th><th class="ht-td-num">Σ 流量 · 网速</th><th style="width:9px;"></th></tr></thead>
                 <tbody>${deviceList.map((d, i) => renderDeviceRow(d, i)).join('')}</tbody>
                </table></div>`
             : `<div class="ht-empty">${installed ? '已启用，等待首次采集到接入设备...' : '启用后开始统计各接入设备的流量'}</div>`;

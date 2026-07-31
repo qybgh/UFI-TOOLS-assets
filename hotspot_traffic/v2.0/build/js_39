@@ -168,10 +168,12 @@
         try {
             if (!_manifest?.trafficUrl) return false;
             const tmpB64 = TRAFFIC_BIN_FILE + '.b64';
-            await run(`curl -sL --fail --connect-timeout 10 --max-time 30 ${sq(_manifest.trafficUrl)} -o ${sq(tmpB64)}`, 35000);
+            const dlR = await run(`curl -sL --fail --connect-timeout 10 --max-time 30 ${sq(_manifest.trafficUrl)} -o ${sq(tmpB64)} && echo __DL_OK__`, 35000);
+            if (!String(dlR?.content || '').includes('__DL_OK__')) { await run(`rm -f ${sq(tmpB64)}`); return false; }
             await run(`base64 -d ${sq(tmpB64)} > ${sq(TRAFFIC_NEW)} 2>/dev/null; rm -f ${sq(tmpB64)}`);
-            const sz = await run(`wc -c < ${sq(TRAFFIC_NEW)} 2>/dev/null || echo 0`, 3000);
-            if (parseInt(sz?.content || '0') < 100) { await run(`rm -f ${sq(TRAFFIC_NEW)}`); return false; }
+            const chk = await run(`echo "$(wc -c < ${sq(TRAFFIC_NEW)} 2>/dev/null || echo 0)|$(head -c 4 ${sq(TRAFFIC_NEW)} 2>/dev/null | od -An -tx1 | sed 's/[^0-9a-f]//g')"`, 3000);
+            const [szS, mg] = String(chk?.content || '').trim().split('|');
+            if (parseInt(szS || '0') < 100 || mg !== '7f454c46') { await run(`rm -f ${sq(TRAFFIC_NEW)}`); return false; }
             return true;
         } catch (e) { console.error('downloadTrafficBin:', e); return false; }
     };
@@ -180,10 +182,12 @@
         try {
             if (!_manifest?.diagUrl) return false;
             const tmpB64 = DIAG_BIN_FILE + '.b64';
-            await run(`curl -sL --fail --connect-timeout 10 --max-time 30 ${sq(_manifest.diagUrl)} -o ${sq(tmpB64)}`, 35000);
+            const dlR = await run(`curl -sL --fail --connect-timeout 10 --max-time 30 ${sq(_manifest.diagUrl)} -o ${sq(tmpB64)} && echo __DL_OK__`, 35000);
+            if (!String(dlR?.content || '').includes('__DL_OK__')) { await run(`rm -f ${sq(tmpB64)}`); return false; }
             await run(`base64 -d ${sq(tmpB64)} > ${sq(DIAG_NEW)} 2>/dev/null; rm -f ${sq(tmpB64)}`);
-            const sz = await run(`wc -c < ${sq(DIAG_NEW)} 2>/dev/null || echo 0`, 3000);
-            if (parseInt(sz?.content || '0') < 100) { await run(`rm -f ${sq(DIAG_NEW)}`); return false; }
+            const chk = await run(`echo "$(wc -c < ${sq(DIAG_NEW)} 2>/dev/null || echo 0)|$(head -c 4 ${sq(DIAG_NEW)} 2>/dev/null | od -An -tx1 | sed 's/[^0-9a-f]//g')"`, 3000);
+            const [szS, mg] = String(chk?.content || '').trim().split('|');
+            if (parseInt(szS || '0') < 100 || mg !== '7f454c46') { await run(`rm -f ${sq(DIAG_NEW)}`); return false; }
             return true;
         } catch (e) { console.error('downloadDiagBin:', e); return false; }
     };
@@ -249,6 +253,7 @@ mv ${sq(TRAFFIC_NEW)} ${sq(TRAFFIC_BIN_FILE)} && mv ${sq(DIAG_NEW)} ${sq(DIAG_BI
         const num = parseInt(bytes) || 0;
         const sign = num < 0 ? '-' : '';
         const abs = Math.abs(num);
+        if (abs >= 1099511627776) return sign + (abs / 1099511627776).toFixed(2) + ' TB';
         if (abs >= 1073741824) return sign + (abs / 1073741824).toFixed(2) + ' GB';
         if (abs >= 1048576) return sign + (abs / 1048576).toFixed(1) + ' MB';
         if (abs >= 1024) return sign + (abs / 1024).toFixed(0) + ' KB';
@@ -360,9 +365,11 @@ _ep=$(awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null)
 [ -n "$_ep" ] && kill -9 "$_ep" 2>/dev/null
 _tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
 [ -n "$_tp" ] && kill -9 "$_tp" 2>/dev/null
+_dp=$(awk '{print}' ${sq(DATA_DIR + '/.dl_pid')} 2>/dev/null)
+[ -n "$_dp" ] && kill -9 "$_dp" 2>/dev/null
 kill -9 "$_p" 2>/dev/null
 fi
-rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
+rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')} ${sq(DATA_DIR + '/.dl_pid')}
 rm -rf ${sq(DATA_DIR + '/.lock_dir')}`.trim();
 
     const START_PROC = `cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`.trim();
@@ -463,6 +470,40 @@ rm -rf ${sq(DATA_DIR)}
             createToast('停用失败：' + (e && e.message ? e.message : String(e)), 'red');
         }
         state._uninstalling = false;
+    };
+
+    const showUninstallConfirm = () => {
+        document.querySelector('#ht_uninstall_confirm')?.remove();
+        let clicks = 0;
+        const { el, close } = createFixedToast('ht_uninstall_confirm', `
+            <div style="pointer-events:all;width:80vw;max-width:300px">
+                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">停用插件<span id="ht_uninstall_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div>
+                <div style="margin:10px 0;font-size:.64rem;line-height:1.6">停用后，流量统计数据将被清除，且无法找回。是否继续？</div>
+                <div style="display:flex;gap:6px;justify-content:flex-end"><button style="font-size:.62rem" id="ht_uninstall_confirm_confirm">确认</button><button style="font-size:.62rem" id="ht_uninstall_confirm_close">取消</button></div>
+            </div>`);
+        el.querySelector('#ht_uninstall_qq').onclick = () => groupTip('群号已复制', 'green');
+        const onClose = () => true;
+        const onConfirm = async () => {
+            clicks++;
+            if (clicks < 3) {
+                const remain = 3 - clicks;
+                const btn = el.querySelector('#ht_uninstall_confirm_confirm');
+                if (btn) btn.textContent = `确认(再点${remain}次)`;
+                createToast(`再点 ${remain} 次即可停用`, 'pink', 1500);
+                return false;
+            }
+            const btn = el.querySelector('#ht_uninstall_confirm_confirm');
+            if (btn) btn.disabled = true;
+            close();
+            const { close: closeLoading } = createFixedToast('ht_uninstall_loading', '正在停用...');
+            try {
+                await uninstall();
+                renderIntoPanel();
+            } finally { closeLoading(); }
+            return false;
+        };
+        el.querySelector('#ht_uninstall_confirm_confirm').onclick = async () => { if (await onConfirm()) close(); };
+        el.querySelector('#ht_uninstall_confirm_close').onclick = () => { if (onClose()) close(); };
     };
 
     // ─── data ─────────────────────────────────────────────────────────────────
@@ -682,8 +723,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-dot-gray{background:rgba(255,255,255,.25);}
       #${MODAL} .ht-tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
       #${MODAL} .ht-tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.62rem;}
-      #${MODAL} .ht-tbl th{font-size:.54rem;opacity:.45;font-weight:500;text-align:left;padding:3px 4px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap;}
-      #${MODAL} .ht-tbl td{padding:1px 4px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle;}
+      #${MODAL} .ht-tbl th{font-size:.54rem;opacity:.45;font-weight:500;text-align:left;padding:3px 2px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap;}
+      #${MODAL} .ht-tbl td{padding:1px 2px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle;}
       #${MODAL} .ht-tbl th:first-child,#${MODAL} .ht-tbl td:first-child{padding-left:0;}
       #${MODAL} .ht-tbl th:last-child,#${MODAL} .ht-tbl td:last-child{padding-right:0;}
       #${MODAL} .ht-tbl tr:last-child td{border-bottom:none;}
@@ -713,7 +754,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-summary-val{font-size:.76rem;font-weight:700;margin-bottom:1px;line-height:1.15;}
       #${MODAL} .ht-summary-lbl{font-size:.52rem;opacity:.45;line-height:1.25;}
       #${MODAL} .ht-diag-item{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:.58rem;line-height:1.35;word-break:break-all;}
-      @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:2px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
+      @media(max-width:570px){#${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);}}
+      @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:2px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
       @media(max-width:480px){#${MODAL} .ht-rate-seg{display:block;margin-top:1px;} #${MODAL} .ht-tbl td.ht-total{white-space:normal;}}
     `;
     };
@@ -827,7 +869,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
 
         const devicesHtml = deviceList.length > 0
             ? `<div class="ht-tbl-wrap"><table class="ht-tbl">
-                <thead><tr><th style="width:10px;text-align:center;">#</th><th style="width:20px;">操作</th><th style="width:45%;">设备</th><th class="ht-td-num">Σ 流量 · 网速</th></tr></thead>
+                <thead><tr><th style="width:10px;text-align:center;">#</th><th style="width:20px;">操作</th><th style="width:49%;">设备</th><th class="ht-td-num">Σ 流量 · 网速</th></tr></thead>
                 <tbody>${deviceList.map((d, i) => renderDeviceRow(d, i)).join('')}</tbody>
                </table></div>`
             : `<div class="ht-empty">${installed ? '已启用，等待首次采集到接入设备...' : '启用后开始统计各接入设备的流量'}</div>`;
@@ -1111,9 +1153,6 @@ echo __RESULT__
         bind(document.querySelector(`#${MODAL}`));
     };
 
-    let _stopClickCount = 0;
-    let _stopClickTimer = null;
-
     let _verTapCount = 0, _verTapTimer = null, _updating = false;
 
     const performUpdate = async () => {
@@ -1197,34 +1236,22 @@ ${START_PROC}
         if (toggleBtn) toggleBtn.onclick = async (e) => {
             const btn = e.currentTarget;
             if (btn.disabled) return;
-            if (state.installed) {
-                _stopClickCount++;
-                if (_stopClickTimer) clearTimeout(_stopClickTimer);
-                _stopClickTimer = setTimeout(() => { _stopClickCount = 0; }, 2000);
-                if (_stopClickCount < 3) {
-                    createToast(`再点击${3 - _stopClickCount}次停用`, 'pink', 1500);
-                    return;
-                }
-                _stopClickCount = 0;
-            }
+            if (state.installed) { showUninstallConfirm(); return; }
             btn.disabled = true;
             try {
-                if (state.installed) { await uninstall(); renderIntoPanel(); }
-                else {
-                    const probeR = await run(`_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
-                    if (String(probeR?.content || '').includes('__ALIVE__')) {
-                        await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
-                        await readStatus();
-                        if (state.installed) await loadData();
-                        renderIntoPanel();
-                        if (state.installed) setAutoData(true);
-                        createToast('插件已在后台运行，已刷新状态', 'green');
-                    } else {
-                        await install();
-                        if (state.installed) await loadData();
-                        renderIntoPanel();
-                        if (state.installed) setAutoData(true);
-                    }
+                const probeR = await run(`_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
+                if (String(probeR?.content || '').includes('__ALIVE__')) {
+                    await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
+                    await readStatus();
+                    if (state.installed) await loadData();
+                    renderIntoPanel();
+                    if (state.installed) setAutoData(true);
+                    createToast('插件已在后台运行，已刷新状态', 'green');
+                } else {
+                    await install();
+                    if (state.installed) await loadData();
+                    renderIntoPanel();
+                    if (state.installed) setAutoData(true);
                 }
             } catch (err) {
                 createToast('操作异常：' + (err && err.message ? err.message : String(err)), 'red');

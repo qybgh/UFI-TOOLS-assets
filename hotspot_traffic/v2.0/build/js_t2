@@ -996,7 +996,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             <div class="ht-summary-item" data-ht="si_3"><div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div></div>
           </div>${zeroWarn}`;
         } else {
-            summaryHtml = `<div class="ht-empty" style="font-size:.58rem;">启用并等待首次采集后显示</div>`;
+            summaryHtml = `<div class="ht-empty" style="font-size:.58rem;">${installed ? '已启用，等待首次采集数据' : '启用并等待首次采集后显示'}</div>`;
         }
 
         const devicesHtml = deviceList.length > 0

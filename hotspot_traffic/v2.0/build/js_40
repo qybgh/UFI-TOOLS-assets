@@ -501,7 +501,7 @@ mkdir -p ${sq(DATA_DIR)}
             setStep: (id, status) => { if (st[id] !== undefined) { st[id] = status; redraw(); } },
             fail: (id, userMsg, detail, onRetry) => {
                 if (st[id] !== undefined) st[id] = 'failed';
-                const detailHtml = esc(new Date().toLocaleString() + ' | 插件版本: ' + (_PREV_VER || '初装') + '→' + (_manifest?.version || '?') + ' | 阶段: ' + id + ' | 详情: ' + (detail || '(无)') + ' | UA: ' + navigator.userAgent.slice(0, 80));
+                const detailHtml = esc(new Date().toLocaleString() + ' | 插件版本: ' + (_PREV_VER || '初装') + '→' + (_manifest?.version || '?') + ' | 阶段: ' + id + ' | 详情: ' + (detail || '(无)') + ' | UA: ' + (navigator.userAgent || '').slice(0, 80) + ((navigator.userAgent || '').length > 80 ? '…' : ''));
                 failInfo = { userMsg, detailHtml, onRetry };
                 redraw();
             },

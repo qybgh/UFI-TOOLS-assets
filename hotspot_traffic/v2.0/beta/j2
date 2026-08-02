@@ -211,6 +211,12 @@
             }
             return { ok: false, detail: curlErrText(ec) + ' | URL: ' + _dlUrl + ' | curl退出码: ' + ec + (dlR?.error ? ' | ' + dlR.error : '') + (dlOut && !m ? ' | 输出: ' + dlOut.slice(0, 120) : '') };
         }
+        const b64Chk = await run(`_inv=$(tr -d 'A-Za-z0-9+/=\n\r' < ${sq(tmpB64)} | wc -c); _sz=$(wc -c < ${sq(tmpB64)}); echo "$_inv|$_sz"`, 5000);
+        const [b64Inv, b64Sz] = String(b64Chk?.content || '').trim().split('|');
+        if (parseInt(b64Inv || '1') > 0 || parseInt(b64Sz || '0') < 200) {
+            await run(`rm -f ${sq(tmpB64)}`, 2000);
+            return { ok: false, detail: 'b64格式校验失败（CDN可能返回了错误页面）| invalid_chars=' + b64Inv + ' size=' + b64Sz + ' | URL: ' + _dlUrl };
+        }
         const decR = await run(`base64 -d ${sq(tmpB64)} > ${sq(destNew)} 2>/dev/null; dc=$?; rm -f ${sq(tmpB64)}; if [ "$dc" -eq 0 ]; then echo __DEC_OK__; else rm -f ${sq(destNew)}; echo __DEC_FAIL__; fi`, 10000);
         if (!String(decR?.content || '').includes('__DEC_OK__')) return { ok: false, detail: '文件内容异常（解码失败）| URL: ' + _dlUrl };
         const chk = await run(`echo "$(wc -c < ${sq(destNew)} 2>/dev/null || echo 0)|$(head -c 4 ${sq(destNew)} 2>/dev/null | od -An -tx1 | sed 's/[^0-9a-f]//g')"`, 5000);
@@ -236,6 +242,11 @@
                 await run(`rm -f ${sq(PENDING_JS_FILE)}`, 2000);
             }
             throw htErr('界面组件下载失败', (m ? curlErrText(m[1]) + ' | curl退出码: ' + m[1] + ' | 大小: ' + m[2] : '输出: ' + out.slice(0, 120)) + ' | URL: ' + _jsUrl);
+        }
+        const sigChk = await run(`grep -q ${sq(_SIG)} ${sq(PENDING_JS_FILE)} && echo __SIG_OK__ || echo __SIG_FAIL__`, 3000);
+        if (!String(sigChk?.content || '').includes('__SIG_OK__')) {
+            await run(`rm -f ${sq(PENDING_JS_FILE)}`, 2000);
+            throw htErr('界面组件内容校验失败', '插件签名不存在 | URL: ' + _jsUrl);
         }
     };
 

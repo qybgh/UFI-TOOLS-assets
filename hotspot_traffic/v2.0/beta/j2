@@ -47,6 +47,7 @@
         if (!url || _cdnIdx >= CDN_MIRRORS.length) return url;
         return url.replace(CDN_ORIGIN, CDN_MIRRORS[_cdnIdx]);
     };
+    const cdnPurge = (ver) => { if (ver) run(`curl -sL --connect-timeout 5 --max-time 10 ${sq((GH_VERSION_BASE + 'v' + ver + '.json').replace(CDN_ORIGIN, 'purge.jsdelivr.net'))}`, 12000).catch(() => {}); };
 
 
     const _M = [0x4b,0x41,0x4e,0x4f,0x5f,0x50,0x4c,0x55,0x47,0x49,0x4e].map(c=>String.fromCharCode(c)).join('');
@@ -162,9 +163,6 @@
                 url = cdnReplace(_PREV_VER
                     ? GH_VERSION_BASE + 'v' + _PREV_VER + '.json'
                     : GH_VERSION_BASE + '_latest.json?_=' + Date.now());
-            } else if (mode === 'purge') {
-                if (!state._deviceVersion) return;
-                url = (GH_VERSION_BASE + 'v' + state._deviceVersion + '.json').replace(CDN_ORIGIN, 'purge.jsdelivr.net');
             } else {
                 if (!state._deviceVersion) return;
                 url = cdnReplace(GH_VERSION_BASE + 'v' + state._deviceVersion + '.json');
@@ -575,7 +573,10 @@ mkdir -p ${sq(DATA_DIR)}
                         if (!_manifest) throw htErr('无法获取版本信息（兜底）', _manifestErr || '响应为空');
                     });
                 }
-                if (!_manifest) throw htErr('无法获取版本信息，请检查网络后重试', _manifestErr || '响应为空');
+                if (!_manifest) {
+                    cdnPurge(_PREV_VER);
+                    throw htErr('无法获取版本信息，请检查网络后重试', _manifestErr || '响应为空');
+                }
             }
             ok('manifest');
             at('prepare');
@@ -1387,12 +1388,20 @@ echo __RESULT__
             const { close: closeChecking } = createFixedToast('ht_update_checking', '正在检查更新...');
             try {
                 await cdnRetry(async (attempt) => {
-                    await fetchManifest('purge');
+                    await fetchManifest();
                     if (!_manifest) throw htErr('检查更新失败', _manifestErr || '响应为空');
                 });
             } catch (e) {
-                closeChecking();
-                return createToast('检查更新失败，请检查网络后重试', 'red');
+                try {
+                    await cdnRetry(async (attempt) => {
+                        await fetchLatestManifest();
+                        if (!_manifest) throw htErr('检查更新失败（兜底）', _manifestErr || '响应为空');
+                    });
+                } catch (e2) {
+                    cdnPurge(state._deviceVersion);
+                    closeChecking();
+                    return createToast('检查更新失败，请检查网络后重试', 'red');
+                }
             }
             closeChecking();
         }
@@ -1536,7 +1545,7 @@ echo __RESULT__
             await loadPolicyMap();
             renderIntoPanel();
             setAutoData(state.installed);
-            fetchManifest();
+            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).catch(() => { cdnPurge(state._deviceVersion); });
         } else {
             setAutoData(false);
         }
@@ -1558,7 +1567,7 @@ echo __RESULT__
             await loadPolicyMap();
             renderIntoPanel();
             setAutoData(state.installed);
-            fetchManifest();
+            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).catch(() => { cdnPurge(state._deviceVersion); });
         })();
     }
 })();

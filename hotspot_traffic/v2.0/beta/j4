@@ -81,7 +81,7 @@
     const CURL_WK_BIG = '--connect-timeout 8 --max-time 60 --speed-limit 1 --speed-time 45';
     const RUN_TO_SMALL = 45000;
     const RUN_TO_BIG = 75000;
-    const CURL_RESUME_ECS = '18|28|56|92';
+    const CURL_RESUME_ECS = new Set(['18','28','56','92']);
     const htErr = (userMsg, detail) => { const e = new Error(userMsg); e.htDetail = String(detail ?? ''); return e; };
     const cdnRetry = async (fn) => {
         let lastErr = null;
@@ -96,7 +96,7 @@
             }
             if (n < CDN_MIRRORS.length) rotateCdn();
         }
-        lastErr.htAttempts = total;
+        if (lastErr && typeof lastErr === 'object') lastErr.htAttempts = total;
         throw lastErr;
     };
 
@@ -204,7 +204,7 @@
         if (!dlOut.includes('__DL_OK__')) {
             const m = dlOut.match(/__DL_FAIL__:(\d+)/);
             const ec = m ? m[1] : '?';
-            if (!CURL_RESUME_ECS.split('|').includes(ec)) {
+            if (!CURL_RESUME_ECS.has(ec)) {
                 await run(`rm -f ${sq(tmpB64)}`, 2000);
             }
             return { ok: false, detail: curlErrText(ec) + ' | URL: ' + _dlUrl + ' | curl退出码: ' + ec + (dlR?.error ? ' | ' + dlR.error : '') + (dlOut && !m ? ' | 输出: ' + dlOut.slice(0, 120) : '') };
@@ -236,7 +236,7 @@
         if (!out.includes('__JS_OK__')) {
             const m = out.match(/__JS_FAIL__:(\d+):(\d+)/);
             const ec = m ? m[1] : '?';
-            if (!CURL_RESUME_ECS.split('|').includes(ec)) {
+            if (!CURL_RESUME_ECS.has(ec)) {
                 await run(`rm -f ${sq(PENDING_JS_FILE)}`, 2000);
             }
             throw htErr('界面组件下载失败', (m ? curlErrText(m[1]) + ' | curl退出码: ' + m[1] + ' | 大小: ' + m[2] : '输出: ' + out.slice(0, 120)) + ' | URL: ' + _jsUrl);

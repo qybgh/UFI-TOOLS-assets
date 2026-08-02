@@ -1392,16 +1392,9 @@ echo __RESULT__
                     if (!_manifest) throw htErr('检查更新失败', _manifestErr || '响应为空');
                 });
             } catch (e) {
-                try {
-                    await cdnRetry(async (attempt) => {
-                        await fetchLatestManifest();
-                        if (!_manifest) throw htErr('检查更新失败（兜底）', _manifestErr || '响应为空');
-                    });
-                } catch (e2) {
-                    cdnPurge(state._deviceVersion);
-                    closeChecking();
-                    return createToast('检查更新失败，请检查网络后重试', 'red');
-                }
+                cdnPurge(state._deviceVersion);
+                closeChecking();
+                return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
             }
             closeChecking();
         }
@@ -1545,7 +1538,16 @@ echo __RESULT__
             await loadPolicyMap();
             renderIntoPanel();
             setAutoData(state.installed);
-            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).catch(() => { cdnPurge(state._deviceVersion); });
+            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).then(() => {
+                if (_manifest && state._deviceVersion && _manifest.version !== state._deviceVersion && !document.querySelector(`#${MODAL} #ht-update-btn`)) {
+                    const vt = document.querySelector(`#${MODAL} #ht-ver-tap`);
+                    if (vt) {
+                        vt.insertAdjacentHTML('afterend', '<span id="ht-update-btn" style="font-size:.5rem;color:#4ade80;cursor:pointer;margin-left:3px;-webkit-user-select:none;user-select:none;">更新 v' + esc(_manifest.version) + '</span>');
+                        const btn = document.querySelector(`#${MODAL} #ht-update-btn`);
+                        if (btn) btn.onclick = (e) => { e.stopPropagation(); handleUpdateClick(); };
+                    }
+                }
+            }).catch(() => { cdnPurge(state._deviceVersion); });
         } else {
             setAutoData(false);
         }
@@ -1567,7 +1569,16 @@ echo __RESULT__
             await loadPolicyMap();
             renderIntoPanel();
             setAutoData(state.installed);
-            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).catch(() => { cdnPurge(state._deviceVersion); });
+            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).then(() => {
+                if (_manifest && state._deviceVersion && _manifest.version !== state._deviceVersion && !document.querySelector(`#${MODAL} #ht-update-btn`)) {
+                    const vt = document.querySelector(`#${MODAL} #ht-ver-tap`);
+                    if (vt) {
+                        vt.insertAdjacentHTML('afterend', '<span id="ht-update-btn" style="font-size:.5rem;color:#4ade80;cursor:pointer;margin-left:3px;-webkit-user-select:none;user-select:none;">更新 v' + esc(_manifest.version) + '</span>');
+                        const btn = document.querySelector(`#${MODAL} #ht-update-btn`);
+                        if (btn) btn.onclick = (e) => { e.stopPropagation(); handleUpdateClick(); };
+                    }
+                }
+            }).catch(() => { cdnPurge(state._deviceVersion); });
         })();
     }
 })();

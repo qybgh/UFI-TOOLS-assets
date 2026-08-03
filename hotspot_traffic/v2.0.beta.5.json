@@ -1,8 +1,0 @@
-{
-    "rev": "2.0.beta.6",
-    "guard": { "url": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/beta/g5", "md5": "1a6fabe6e2642b8d510823266508a580" },
-    "diag": { "url": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/beta/di5", "md5": "417775f2dc12222ee19e57f15c0bd379" },
-    "deploy": { "url": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/beta/de5", "md5": "e764158ee8401ddb4a87d0be24b7ef3c" },
-    "js": { "url": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/beta/j5", "md5": "241fad27f81fc926b7bf3ce24bc34e76" },
-    "notes": "1.全新架构设计，极低的性能开销，流量统计数据更准确\n2.新增设备名称自动识别\n3.新增设备级拉黑功能\n4.新增设备网速展示\n5.弱网环境专项优化\n6.其它细节优化\n\n更新成功后若流量统计表现异常，请重新启用插件以重置历史残留数据"
-}

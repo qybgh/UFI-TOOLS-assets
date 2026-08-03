@@ -41,6 +41,8 @@
     const CDN_RETRY_PER_NODE = 3;
     const CDN_RETRY_DELAY = 800;
     let _cdnIdx = 0;
+    const TRAFFIC_BIN_FILE = '/sdcard/hotspot_traffic';
+    const PENDING_JS_FILE = '/data/local/tmp/_ht_pending.js';
 
     const rotateCdn = () => { _cdnIdx = (_cdnIdx + 1) % (CDN_MIRRORS.length + 1); };
     const cdnReplace = (url) => {
@@ -143,116 +145,93 @@
 
 
     let _manifest = null;
-    let _manifestErr = null;
-    const fetchLatestManifest = async () => {
-        const url = cdnReplace(GH_VERSION_BASE + '_latest.json?_=' + Date.now());
-        const r = await run(`curl -sL ${CURL_WK_SMALL} ${sq(url)}`, RUN_TO_SMALL);
-        const text = String(r?.content || '').trim();
-        if (!text || text[0] !== '{') { _manifestErr = 'URL: ' + url + ' 响应异常: ' + (text ? text.slice(0, 80) : '(空)'); return; }
-        const j = JSON.parse(text);
-        if (!j.rev || !j.guard || !j.diag) { _manifestErr = 'URL: ' + url + ' 清单缺少字段'; return; }
-        _manifest = { version: j.rev, trafficUrl: j.guard, diagUrl: j.diag, jsUrl: j.js || '', notes: j.notes || '' };
-        _manifestErr = null;
+    const probeBestCdn = async () => {
+        const cacheTs = localStorage.getItem('ht_cdn_probe_ts');
+        if (cacheTs && Date.now() - parseInt(cacheTs) < 3600000) {
+            return localStorage.getItem('ht_cdn_probe_node') || CDN_ORIGIN;
+        }
+        const candidates = [CDN_ORIGIN, ...CDN_MIRRORS];
+        const results = [];
+        for (const node of candidates) {
+            const testUrl = `https://${node}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/latest.json?_=${Date.now()}`;
+            const start = Date.now();
+            const r = await run(
+                `curl -sL --connect-timeout 3 --max-time 5 -w '%{http_code}' -o /dev/null ${sq(testUrl)}`, 8000
+            ).catch(() => ({ content: '0' }));
+            const elapsed = Date.now() - start;
+            if (String(r?.content || '').trim() === '200') results.push({ node, rtt: elapsed });
+        }
+        const best = results.length > 0
+            ? results.sort((a, b) => a.rtt - b.rtt)[0].node
+            : CDN_ORIGIN;
+        localStorage.setItem('ht_cdn_probe_node', best);
+        localStorage.setItem('ht_cdn_probe_ts', String(Date.now()));
+        return best;
     };
-    const fetchManifest = async (mode) => {
-        if (!GH_VERSION_BASE) return;
-        let url = null;
-        let text = null;
-        try {
-            if (mode === 'init') {
-                url = cdnReplace(_PREV_VER
-                    ? GH_VERSION_BASE + 'v' + _PREV_VER + '.json'
-                    : GH_VERSION_BASE + '_latest.json?_=' + Date.now());
-            } else {
-                if (!state._deviceVersion) return;
-                url = cdnReplace(GH_VERSION_BASE + 'v' + state._deviceVersion + '.json');
-            }
+
+    const fetchManifestWithProbe = async (jsonFileName) => {
+        const bestNode = await probeBestCdn();
+        const baseUrl = GH_VERSION_BASE.replace(CDN_ORIGIN, bestNode);
+        const url = baseUrl + jsonFileName + '?_=' + Date.now();
+        for (let retry = 0; retry < 3; retry++) {
             const r = await run(`curl -sL ${CURL_WK_SMALL} ${sq(url)}`, RUN_TO_SMALL);
-            text = String(r?.content || '').trim();
-            if (!text || text[0] !== '{') {
-                _manifestErr = 'URL: ' + url + ' 响应异常: ' + (text ? text.slice(0, 80) : '(空)');
-                return;
+            const text = String(r?.content || '').trim();
+            if (text && text[0] === '{') {
+                try {
+                    const j = JSON.parse(text);
+                    if (j.rev && j.guard?.url && j.diag?.url && j.deploy?.url && j.js?.url) return j;
+                } catch {}
             }
-            const j = JSON.parse(text);
-            if (!j.rev || !j.guard || !j.diag) {
-                _manifestErr = 'URL: ' + url + ' 清单缺少字段: ' + ['rev','guard','diag'].filter(k => !j[k]).join(',');
-                console.warn('[HT] fetch url:', url, 'incomplete manifest:', text);
-                return;
-            }
-            _manifest = { version: j.rev, trafficUrl: j.guard, diagUrl: j.diag, jsUrl: j.js || '', notes: j.notes || '' };
-            _manifestErr = null;
-            console.log('[HT] fetch url:', url, 'manifest:', JSON.stringify(_manifest));
-        } catch (e) {
-            _manifestErr = 'URL: ' + url + ' 异常: ' + (e?.message || e);
-            console.warn('[HT] fetch url:', url, 'text:', text, 'error:', e);
+            if (retry < 2) await wait(CDN_RETRY_DELAY * Math.pow(2, retry));
         }
+        return null;
     };
 
-    // ─── download + atomic deploy ─────────────────────────────
-    const TRAFFIC_BIN_FILE = '/sdcard/hotspot_traffic';
-    const TRAFFIC_NEW = TRAFFIC_BIN_FILE + '.new';
-    const DIAG_NEW = DIAG_BIN_FILE + '.new';
-    const PENDING_JS_FILE = '/data/local/tmp/_ht_pending.js';
-
-    const downloadBinTo = async (url, destNew, tmpB64, resume = false) => {
-        if (!url) return { ok: false, detail: '版本清单中缺少下载地址' };
-        const _dlUrl = cdnReplace(url);
-        if (!resume) await run(`rm -f ${sq(tmpB64)}`, 2000);
-        const resumeFlag = resume ? '-C - ' : '';
-        const dlR = await run(`curl -sL --fail ${resumeFlag}${CURL_WK_BIG} ${sq(_dlUrl)} -o ${sq(tmpB64)}; ec=$?; if [ "$ec" -eq 0 ]; then echo __DL_OK__; else echo "__DL_FAIL__:$ec"; fi`, RUN_TO_BIG);
-        const dlOut = String(dlR?.content || '').trim();
-        if (!dlOut.includes('__DL_OK__')) {
-            const m = dlOut.match(/__DL_FAIL__:(\d+)/);
-            const ec = m ? m[1] : '?';
-            if (!CURL_RESUME_ECS.has(ec)) {
-                await run(`rm -f ${sq(tmpB64)}`, 2000);
-            }
-            return { ok: false, detail: curlErrText(ec) + ' | URL: ' + _dlUrl + ' | curl退出码: ' + ec + (dlR?.error ? ' | ' + dlR.error : '') + (dlOut && !m ? ' | 输出: ' + dlOut.slice(0, 120) : '') };
-        }
-        const b64Chk = await run(`_inv=$(tr -d 'A-Za-z0-9+/=\n\r' < ${sq(tmpB64)} | wc -c); _sz=$(wc -c < ${sq(tmpB64)}); echo "$_inv|$_sz"`, 5000);
-        const [b64Inv, b64Sz] = String(b64Chk?.content || '').trim().split('|');
-        if (parseInt(b64Inv || '1') > 0 || parseInt(b64Sz || '0') < 200) {
-            await run(`rm -f ${sq(tmpB64)}`, 2000);
-            return { ok: false, detail: 'b64格式校验失败（CDN可能返回了错误页面）| invalid_chars=' + b64Inv + ' size=' + b64Sz + ' | URL: ' + _dlUrl };
-        }
-        const decR = await run(`base64 -d ${sq(tmpB64)} > ${sq(destNew)} 2>/dev/null; dc=$?; rm -f ${sq(tmpB64)}; if [ "$dc" -eq 0 ]; then echo __DEC_OK__; else rm -f ${sq(destNew)}; echo __DEC_FAIL__; fi`, 10000);
-        if (!String(decR?.content || '').includes('__DEC_OK__')) return { ok: false, detail: '文件内容异常（解码失败）| URL: ' + _dlUrl };
-        const chk = await run(`echo "$(wc -c < ${sq(destNew)} 2>/dev/null || echo 0)|$(head -c 4 ${sq(destNew)} 2>/dev/null | od -An -tx1 | sed 's/[^0-9a-f]//g')"`, 5000);
-        const [szS, mg] = String(chk?.content || '').trim().split('|');
-        if (parseInt(szS || '0') < 100 || mg !== '7f454c46') {
-            await run(`rm -f ${sq(destNew)}`);
-            return { ok: false, detail: '文件校验未通过 | size=' + szS + ' magic=' + mg + ' | URL: ' + _dlUrl };
-        }
-        return { ok: true };
-    };
-    const downloadTrafficBin = (resume) => downloadBinTo(_manifest?.trafficUrl, TRAFFIC_NEW, TRAFFIC_BIN_FILE + '.b64', resume);
-    const downloadDiagBin = (resume) => downloadBinTo(_manifest?.diagUrl, DIAG_NEW, DIAG_BIN_FILE + '.b64', resume);
-    const preDownloadJs = async (jsUrl, resume = false) => {
-        const _jsUrl = cdnReplace(jsUrl);
-        if (!resume) await run(`rm -f ${sq(PENDING_JS_FILE)}`, 2000);
-        const resumeFlag = resume ? '-C - ' : '';
-        const dlR = await run(`curl -sL --fail ${resumeFlag}${CURL_WK_BIG} ${sq(_jsUrl)} -o ${sq(PENDING_JS_FILE)}; ec=$?; sz=$(wc -c < ${sq(PENDING_JS_FILE)} 2>/dev/null || echo 0); if [ "$ec" -eq 0 ] && [ "$sz" -gt 200 ]; then echo __JS_OK__; else echo "__JS_FAIL__:$ec:$sz"; fi`, RUN_TO_BIG);
-        const out = String(dlR?.content || '').trim();
-        if (!out.includes('__JS_OK__')) {
-            const m = out.match(/__JS_FAIL__:(\d+):(\d+)/);
-            const ec = m ? m[1] : '?';
-            if (!CURL_RESUME_ECS.has(ec)) {
-                await run(`rm -f ${sq(PENDING_JS_FILE)}`, 2000);
-            }
-            throw htErr('界面组件下载失败', (m ? curlErrText(m[1]) + ' | curl退出码: ' + m[1] + ' | 大小: ' + m[2] : '输出: ' + out.slice(0, 120)) + ' | URL: ' + _jsUrl);
-        }
-        const sigChk = await run(`grep -q ${sq(_SIG)} ${sq(PENDING_JS_FILE)} && echo __SIG_OK__ || echo __SIG_FAIL__`, 3000);
-        if (!String(sigChk?.content || '').includes('__SIG_OK__')) {
-            await run(`rm -f ${sq(PENDING_JS_FILE)}`, 2000);
-            throw htErr('界面组件内容校验失败', '插件签名不存在 | URL: ' + _jsUrl);
-        }
+    const parseManifest = (j) => {
+        if (!j || !j.rev || !j.guard?.url || !j.diag?.url || !j.deploy?.url || !j.js?.url) return null;
+        return {
+            version: j.rev,
+            guardUrl: j.guard.url, guardMd5: j.guard.md5 || '',
+            diagUrl: j.diag.url, diagMd5: j.diag.md5 || '',
+            deployUrl: j.deploy.url, deployMd5: j.deploy.md5 || '',
+            jsUrl: j.js.url, jsMd5: j.js.md5 || '',
+            notes: j.notes || '',
+        };
     };
 
-    const atomicDeploy = async (ver) => {
-        const r = await run(`
-mv ${sq(TRAFFIC_NEW)} ${sq(TRAFFIC_BIN_FILE)} && mv ${sq(DIAG_NEW)} ${sq(DIAG_BIN_FILE)} && chmod 755 ${sq(TRAFFIC_BIN_FILE)} ${sq(DIAG_BIN_FILE)} && printf '%s' ${sq(ver)} > ${sq(DATA_DIR + '/.version.tmp')} && mv ${sq(DATA_DIR + '/.version.tmp')} ${sq(DATA_DIR + '/.version')} && echo __DEPLOY_OK__
-`, 5000);
-        if (!String(r?.content || '').includes('__DEPLOY_OK__')) throw htErr('文件部署失败', '输出: ' + String(r?.content || r?.error || '(空)').slice(0, 200));
+    const downloadDeployScript = async (url, expectedMd5, progress) => {
+        const bin = '/data/local/tmp/ht_deploy.sh';
+        const b64 = bin + '.b64';
+        await cdnRetry(async (attempt, isNewNode) => {
+            if (attempt > 0) progress('dl_deploy', 'running', '重试 ' + (attempt + 1));
+            const _url = cdnReplace(url);
+            if (isNewNode) await run(`rm -f ${sq(b64)}`, 2000);
+            const resumeFlag = !isNewNode ? '-C - ' : '';
+            const dlR = await run(
+                `curl -sL --fail ${resumeFlag}${CURL_WK_BIG} ${sq(_url)} -o ${sq(b64)}; ec=$?; [ "$ec" -eq 0 ] && echo __DL_OK__ || echo "__DL_FAIL__:$ec"`, RUN_TO_BIG);
+            if (!String(dlR?.content || '').includes('__DL_OK__')) {
+                const m = String(dlR?.content || '').match(/__DL_FAIL__:(\d+)/);
+                if (!CURL_RESUME_ECS.has(m?.[1])) await run(`rm -f ${sq(b64)}`, 2000);
+                throw htErr('部署脚本下载失败', curlErrText(m?.[1] || '?'));
+            }
+            const chk = await run(`_i=$(tr -d 'A-Za-z0-9+/=\\n\\r' < ${sq(b64)} | wc -c); _s=$(wc -c < ${sq(b64)}); echo "$_i|$_s"`, 5000);
+            const [inv, sz] = String(chk?.content || '').trim().split('|');
+            if (parseInt(inv || '1') > 0 || parseInt(sz || '0') < 200) {
+                await run(`rm -f ${sq(b64)}`, 2000);
+                throw htErr('部署脚本格式异常');
+            }
+            const dec = await run(`base64 -d ${sq(b64)} > ${sq(bin)} && rm -f ${sq(b64)} && echo __OK__`, 10000);
+            if (!String(dec?.content || '').includes('__OK__')) throw htErr('部署脚本解码失败');
+            if (expectedMd5) {
+                const md5r = await run(`md5sum ${sq(bin)} | awk '{print $1}'`, 5000);
+                if (String(md5r?.content || '').trim() !== expectedMd5) {
+                    await run(`rm -f ${sq(bin)}`, 2000);
+                    throw htErr('部署脚本MD5不匹配');
+                }
+            }
+        });
+        await run(`chmod 755 ${sq(bin)}`);
+        return bin;
     };
 
     const applyPluginJs = async (prevVer) => {
@@ -397,9 +376,22 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
         }
     };
 
-
     // ─── install / uninstall ──────────────────────────────────────────────────
-    const KILL_PROCS = `
+    let _recoverTried = false;
+    const recoverDaemonOnce = async () => {
+        if (_recoverTried || state.installed) return;
+        _recoverTried = true;
+        const r = await run(`grep -q ${sq(NAME)} ${sq(BOOT_SH_FILE)} 2>/dev/null || exit 0; _p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
+        if (!String(r?.content || '').includes('__DEAD__')) return;
+        await run(`cp /sdcard/hotspot_traffic ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`, 10000);
+        await wait(1500);
+        await readStatus();
+        if (state.installed) createToast('检测到后台服务已停止，已自动恢复', 'green');
+    };
+
+    const cleanResidue = async () => {
+        try {
+            await run(`
 _p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
 if [ -n "$_p" ]; then
 kill -15 "$_p" 2>/dev/null
@@ -408,77 +400,66 @@ _ep=$(awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null)
 [ -n "$_ep" ] && kill -9 "$_ep" 2>/dev/null
 _tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
 [ -n "$_tp" ] && kill -9 "$_tp" 2>/dev/null
-_dp=$(awk '{print}' ${sq(DATA_DIR + '/.dl_pid')} 2>/dev/null)
-[ -n "$_dp" ] && kill -9 "$_dp" 2>/dev/null
 kill -9 "$_p" 2>/dev/null
 fi
-rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')} ${sq(DATA_DIR + '/.dl_pid')}
-rm -rf ${sq(DATA_DIR + '/.lock_dir')}`.trim();
-
-    const START_PROC = `cp ${sq(TRAFFIC_BIN_FILE)} ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`.trim();
-
-    const startProcVerified = async () => {
-        for (let i = 0; i < 2; i++) {
-            await run(`\n${KILL_PROCS}\n${START_PROC}\n`, 15000);
-            await wait(1500);
-            const chk = await run(`_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); if [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null; then echo __ALIVE__; else echo __DEAD__; fi`, 5000);
-            if (String(chk?.content || '').includes('__ALIVE__')) return;
-            if (i === 0) await wait(1000);
-        }
-        const tail = await run(`tail -n 5 ${sq(LOG_FILE)} 2>/dev/null`, 3000);
-        throw htErr('后台服务启动失败', '进程未存活 | 日志尾部: ' + String(tail?.content || '(无日志)').slice(-400));
-    };
-
-    let _recoverTried = false;
-    const recoverDaemonOnce = async () => {
-        if (_recoverTried || state.installed) return;
-        _recoverTried = true;
-        const r = await run(`grep -q ${sq(NAME)} ${sq(BOOT_SH_FILE)} 2>/dev/null || exit 0; _p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
-        if (!String(r?.content || '').includes('__DEAD__')) return;
-        await run(START_PROC, 10000);
-        await wait(1500);
-        await readStatus();
-        if (state.installed) createToast('检测到后台服务已停止，已自动恢复', 'green');
-    };
-
-    const IPT_CLEANUP = `iptables -w 5 -t filter -D FORWARD -j HT_BL 2>/dev/null
-iptables -w 5 -t filter -F HT_BL 2>/dev/null
-iptables -w 5 -t filter -X HT_BL 2>/dev/null
-iptables -w 5 -t mangle -D FORWARD -j HT_THROTTLE 2>/dev/null
-iptables -w 5 -t mangle -F HT_THROTTLE 2>/dev/null
-iptables -w 5 -t mangle -X HT_THROTTLE 2>/dev/null
-ip6tables -w 5 -t filter -D FORWARD -j HT_BL6 2>/dev/null
-ip6tables -w 5 -t filter -F HT_BL6 2>/dev/null
-ip6tables -w 5 -t filter -X HT_BL6 2>/dev/null
-ip6tables -w 5 -t mangle -D FORWARD -j HT_THROTTLE6 2>/dev/null
-ip6tables -w 5 -t mangle -F HT_THROTTLE6 2>/dev/null
-ip6tables -w 5 -t mangle -X HT_THROTTLE6 2>/dev/null`;
-
-    const cleanResidue = async () => {
-        try {
-            await run(`
-${KILL_PROCS}
+rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
+rm -rf ${sq(DATA_DIR + '/.lock_dir')}
 sed -i '/${NAME}/d' ${sq(BOOT_SH_FILE)} 2>/dev/null
-${IPT_CLEANUP}
-rm -f ${sq(TRAFFIC_BIN_FILE)} ${sq(DIAG_BIN_FILE)} ${sq(LOG_FILE)} ${TRAFFIC_PROC} ${DIAG_PROC}
+rm -f /sdcard/hotspot_traffic /sdcard/hotspot_diag ${sq(LOG_FILE)} ${TRAFFIC_PROC} ${DIAG_PROC}
 rm -rf ${sq(DATA_DIR)}
 mkdir -p ${sq(DATA_DIR)}
 `, 10000);
         } catch (e) { console.error('cleanResidue:', e); }
     };
 
+    const pollDeployHeartbeat = (progress, timeoutMs = 120000) => {
+        return new Promise((resolve, reject) => {
+            const startTs = Date.now();
+            let lastLine = '', lastBeatTs = Date.now();
+            const poll = setInterval(async () => {
+                if (Date.now() - startTs > timeoutMs) { clearInterval(poll); reject(htErr('部署超时')); return; }
+                if (Date.now() - lastBeatTs > 30000) { clearInterval(poll); reject(htErr('后台无响应')); return; }
+                const r = await run(`tail -n 1 ${sq(DATA_DIR + '/.deploy_heartbeat')} 2>/dev/null`, 2000);
+                const line = String(r?.content || '').trim();
+                if (!line || line === lastLine) return;
+                lastLine = line; lastBeatTs = Date.now();
+                const [, step, status, detail] = line.split('|');
+                if (['running','done','warn'].includes(status)) progress(step, status, detail || '');
+                if (status === 'failed') { clearInterval(poll); reject(htErr(detail || step)); return; }
+                if (step === 'complete' && status === 'done') { clearInterval(poll); resolve(); }
+            }, 500);
+        });
+    };
+
+    const executeDeploy = async (deployBin, manifest, prevVer, progress) => {
+        await run(`rm -f ${sq(DATA_DIR + '/.deploy_heartbeat')}`);
+        const mirrors = [CDN_ORIGIN, ...CDN_MIRRORS].join(' ');
+        const cmd = [sq(deployBin), sq(manifest.version),
+            sq(manifest.guardUrl), sq(manifest.guardMd5),
+            sq(manifest.diagUrl), sq(manifest.diagMd5),
+            sq(manifest.jsUrl), sq(manifest.jsMd5),
+            sq(prevVer), sq(mirrors)].join(' ');
+        const proc = run(cmd, 120000);
+        await pollDeployHeartbeat(progress);
+        await proc;
+        await run(`rm -f ${sq(deployBin)}`);
+        await applyPluginJs(prevVer);
+    };
+
     // ─── 启用/更新进度弹窗 ───
-    const INSTALL_STEPS = [
-        { id: 'env',      label: '检查设备环境' },
-        { id: 'manifest', label: '获取版本信息' },
-        { id: 'prepare',  label: '清理旧数据' },
-        { id: 'dl_main',  label: '下载监控组件' },
-        { id: 'dl_diag',  label: '下载诊断组件' },
-        { id: 'dl_js',    label: '下载界面组件' },
-        { id: 'deploy',   label: '部署并启动服务' },
-        { id: 'finish',   label: '完成设置' },
+    const DEPLOY_STEPS = [
+        { id: 'env',        label: '检查设备环境' },
+        { id: 'manifest',   label: '获取版本信息' },
+        { id: 'dl_deploy',  label: '下载部署脚本' },
+        { id: 'dl_guard',   label: '下载监控组件' },
+        { id: 'dl_diag',    label: '下载诊断组件' },
+        { id: 'dl_js',      label: '下载界面组件' },
+        { id: 'prepare_js', label: '准备界面更新' },
+        { id: 'deploy',     label: '部署文件' },
+        { id: 'restart',    label: '切换服务' },
+        { id: 'complete',   label: '完成' },
     ];
-    const UPDATE_STEPS = INSTALL_STEPS.filter(s => !['env', 'prepare'].includes(s.id));
+    const UPDATE_DEPLOY_STEPS = DEPLOY_STEPS.filter(s => s.id !== 'env');
 
     const showFlowProgress = (title, steps, failPrefix = '启用失败') => {
         document.querySelector('#ht_flow_progress')?.remove();
@@ -546,7 +527,7 @@ mkdir -p ${sq(DATA_DIR)}
         if (state._installing) return createToast('正在启用中，请稍候', 'yellow');
         if (!(await checkAdvancedFunc())) return createToast('没有开启高级功能，无法使用！', 'red');
         state._installing = true;
-        const flow = showFlowProgress('启用热点流量监控', INSTALL_STEPS);
+        const flow = showFlowProgress('启用热点流量监控', DEPLOY_STEPS);
         let curStep = 'env';
         const at = (id) => { curStep = id; flow.setStep(id, 'running'); };
         const ok = (id) => flow.setStep(id, 'done');
@@ -554,62 +535,45 @@ mkdir -p ${sq(DATA_DIR)}
             at('env');
             const probeR = await run(`iptables -w 5 -L FORWARD -n 2>/dev/null && echo __OK__ || echo __FAIL__`, 8000);
             if (!String(probeR?.content || '').includes('__OK__'))
-                throw htErr('设备网络组件检查未通过，请重启设备后再试', 'iptables探测输出: ' + String(probeR?.content || probeR?.error || '(空)').slice(0, 200));
+                throw htErr('设备网络组件检查未通过', 'iptables探测失败');
             ok('env');
+
             at('manifest');
-            try {
-                await cdnRetry(async (attempt) => {
-                    if (attempt > 0) flow.setStep('manifest', 'running', '重试 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE));
-                    await fetchManifest('init');
-                    if (!_manifest) throw htErr('无法获取版本信息', _manifestErr || '响应为空');
-                });
-            } catch (e) {
-                if (_PREV_VER && !_manifest) {
-                    console.log('[HT] v' + _PREV_VER + '.json 全部失败，尝试 _latest.json 兜底');
-                    flow.setStep('manifest', 'running', '兜底源');
-                    await cdnRetry(async (attempt) => {
-                        if (attempt > 0) flow.setStep('manifest', 'running', '兜底 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE));
-                        await fetchLatestManifest();
-                        if (!_manifest) throw htErr('无法获取版本信息（兜底）', _manifestErr || '响应为空');
-                    });
-                }
-                if (!_manifest) {
-                    cdnPurge(_PREV_VER);
-                    throw htErr('无法获取版本信息，请检查网络后重试', _manifestErr || '响应为空');
-                }
+            let rawManifest = await fetchManifestWithProbe(
+                _PREV_VER ? 'v' + _PREV_VER + '.json' : '_latest.json'
+            );
+            if (!rawManifest && _PREV_VER) {
+                flow.setStep('manifest', 'running', '兜底源');
+                rawManifest = await fetchManifestWithProbe('_latest.json');
             }
+            if (!rawManifest) throw htErr('无法获取版本信息，请检查网络后重试');
+            _manifest = parseManifest(rawManifest);
+            if (!_manifest) throw htErr('版本信息格式异常');
             ok('manifest');
-            at('prepare');
+
             await cleanResidue();
             await run(`mkdir -p ${sq(DATA_DIR)}`);
-            ok('prepare');
-            const ver = _manifest?.version || '';
-            at('dl_main');
-            await cdnRetry(async (attempt, isNewNode) => { if (attempt > 0) flow.setStep('dl_main', 'running', '重试 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE)); const r = await downloadTrafficBin(!isNewNode); if (!r.ok) throw htErr('监控组件下载失败', r.detail); });
-            ok('dl_main');
-            at('dl_diag');
-            await cdnRetry(async (attempt, isNewNode) => { if (attempt > 0) flow.setStep('dl_diag', 'running', '重试 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE)); const r = await downloadDiagBin(!isNewNode); if (!r.ok) throw htErr('诊断组件下载失败', r.detail); });
-            ok('dl_diag');
-            at('dl_js');
-            if (_manifest.jsUrl) {
-                await cdnRetry(async (attempt, isNewNode) => { if (attempt > 0) flow.setStep('dl_js', 'running', '重试 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE)); return preDownloadJs(_manifest.jsUrl, !isNewNode); });
-            }
-            ok('dl_js');
-            at('deploy');
-            await atomicDeploy(ver);
+
+            at('dl_deploy');
+            const deployBin = await downloadDeployScript(
+                _manifest.deployUrl, _manifest.deployMd5,
+                (id, st, hint) => flow.setStep(id, st, hint)
+            );
+            ok('dl_deploy');
+
+            await executeDeploy(deployBin, _manifest, _PREV_VER || '', (step, status, detail) => {
+                flow.setStep(step, status, detail);
+            });
+
             await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
-            await startProcVerified();
-            ok('deploy');
-            at('finish');
-            await applyPluginJs(_PREV_VER);
-            ok('finish');
+
             state.installed = true;
-            state._deviceVersion = ver;
+            state._deviceVersion = _manifest.version;
             flow.done();
-            createToast('已启用并更新到最新版 v' + ver + '，2秒后刷新页面', 'green');
+            createToast('已启用 v' + _manifest.version + '，2秒后刷新', 'green');
             setTimeout(() => location.reload(), 2000);
         } catch (e) {
-            flow.fail(curStep, e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已自动重试' + e.htAttempts + '次' : ''), startInstallFlow);
+            flow.fail(curStep, e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已重试' + e.htAttempts + '次' : ''), startInstallFlow);
         } finally { state._installing = false; }
     };
 
@@ -629,8 +593,18 @@ mkdir -p ${sq(DATA_DIR)}
         try {
             await run(`
 sed -i '/${NAME}/d' ${sq(BOOT_SH_FILE)} 2>/dev/null
-${KILL_PROCS}
-${IPT_CLEANUP}
+_p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
+if [ -n "$_p" ]; then
+kill -15 "$_p" 2>/dev/null
+_i=0; while kill -0 "$_p" 2>/dev/null && [ "$_i" -lt 15 ]; do sleep 0.1; _i=$((_i+1)); done
+_ep=$(awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null)
+[ -n "$_ep" ] && kill -9 "$_ep" 2>/dev/null
+_tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
+[ -n "$_tp" ] && kill -9 "$_tp" 2>/dev/null
+kill -9 "$_p" 2>/dev/null
+fi
+rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
+rm -rf ${sq(DATA_DIR + '/.lock_dir')}
 rm -f ${sq(TRAFFIC_BIN_FILE)} ${sq(DIAG_BIN_FILE)} ${sq(LOG_FILE)} ${TRAFFIC_PROC} ${DIAG_PROC} ${sq(WEBHOOK_FILE)} ${sq(TRAFFIC_BIN_FILE + '.b64')} ${sq(DIAG_BIN_FILE + '.b64')} ${sq(PENDING_JS_FILE)}
 rm -rf ${sq(DATA_DIR)}
 `, 10000);
@@ -1331,39 +1305,25 @@ echo __RESULT__
         try {
             progress('manifest', 'running');
             if (!_manifest) {
-                await fetchManifest('update');
-                if (!_manifest) throw htErr('无法获取版本信息，请检查网络后重试', _manifestErr || '响应为空');
+                const raw = await fetchManifestWithProbe('v' + state._deviceVersion + '.json');
+                if (!raw) throw htErr('无法获取版本信息');
+                _manifest = parseManifest(raw);
+                if (!_manifest) throw htErr('版本信息格式异常');
             }
             progress('manifest', 'done');
-            const oldVer = state._deviceVersion || '';
-            const ver = _manifest?.version || '';
-            await run(`rm -f ${sq(TRAFFIC_NEW)} ${sq(DIAG_NEW)} ${sq(PENDING_JS_FILE)} ${sq(TRAFFIC_BIN_FILE + '.b64')} ${sq(DIAG_BIN_FILE + '.b64')} 2>/dev/null`);
-            curStep = 'dl_main';
-            progress('dl_main', 'running');
-            await cdnRetry(async (attempt, isNewNode) => { if (attempt > 0) { progress('dl_main', 'running', '重试 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE)); } const r = await downloadTrafficBin(!isNewNode); if (!r.ok) throw htErr('监控组件下载失败', r.detail); });
-            progress('dl_main', 'done');
-            curStep = 'dl_diag';
-            progress('dl_diag', 'running');
-            await cdnRetry(async (attempt, isNewNode) => { if (attempt > 0) { progress('dl_diag', 'running', '重试 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE)); } const r = await downloadDiagBin(!isNewNode); if (!r.ok) throw htErr('诊断组件下载失败', r.detail); });
-            progress('dl_diag', 'done');
-            curStep = 'dl_js';
-            progress('dl_js', 'running');
-            if (_manifest.jsUrl) await cdnRetry(async (attempt, isNewNode) => { if (attempt > 0) { progress('dl_js', 'running', '重试 ' + (attempt + 1) + '/' + ((CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE)); } return preDownloadJs(_manifest.jsUrl, !isNewNode); });
-            progress('dl_js', 'done');
+
+            curStep = 'dl_deploy';
+            progress('dl_deploy', 'running');
+            const deployBin = await downloadDeployScript(_manifest.deployUrl, _manifest.deployMd5, progress);
+            progress('dl_deploy', 'done');
+
             curStep = 'deploy';
-            progress('deploy', 'running');
-            await atomicDeploy(ver);
-            await run(`${IPT_CLEANUP}`, 10000);
-            await startProcVerified();
-            progress('deploy', 'done');
-            curStep = 'finish';
-            progress('finish', 'running');
-            await applyPluginJs(oldVer);
+            await executeDeploy(deployBin, _manifest, state._deviceVersion || '', progress);
+
             await run(`rm -f ${sq(DIAG_RESULT_FILE)} ${sq(DATA_DIR + '/diag_state.txt')} ${sq(LAST_REPORT_TS_FILE)} ${sq(DIAG_LOCK_FILE)} 2>/dev/null`);
             clearDiagState();
-            if (ver) await run(`printf '%s' ${sq(ver)} > ${sq(DATA_DIR + '/.version.tmp')} && mv ${sq(DATA_DIR + '/.version.tmp')} ${sq(DATA_DIR + '/.version')}`);
-            state._deviceVersion = ver;
-            progress('finish', 'done');
+            state._deviceVersion = _manifest.version;
+            progress('complete', 'done');
         } catch (e) {
             e.htStep = curStep;
             throw e;
@@ -1386,17 +1346,10 @@ echo __RESULT__
         if (!(await checkAdvancedFunc())) return;
         if (!_manifest) {
             const { close: closeChecking } = createFixedToast('ht_update_checking', '正在检查更新...');
-            try {
-                await cdnRetry(async (attempt) => {
-                    await fetchManifest();
-                    if (!_manifest) throw htErr('检查更新失败', _manifestErr || '响应为空');
-                });
-            } catch (e) {
-                cdnPurge(state._deviceVersion);
-                closeChecking();
-                return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
-            }
+            const raw = await fetchManifestWithProbe('v' + state._deviceVersion + '.json');
             closeChecking();
+            if (!raw) return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
+            _manifest = parseManifest(raw);
         }
         if (!_manifest || _manifest.version === state._deviceVersion) {
             return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
@@ -1404,14 +1357,14 @@ echo __RESULT__
         const confirmed = await showUpdateConfirm(_manifest.version, _manifest.notes);
         if (!confirmed) return;
         _updating = true;
-        const flow = showFlowProgress('更新热点流量监控', UPDATE_STEPS, '更新失败');
+        const flow = showFlowProgress('更新热点流量监控', UPDATE_DEPLOY_STEPS, '更新失败');
         try {
             await performUpdate((id, st, hint) => flow.setStep(id, st, hint));
             flow.done();
             createToast('已更新到 v' + state._deviceVersion + '，2秒后刷新页面', 'green');
             setTimeout(() => location.reload(), 2000);
         } catch (e) {
-            flow.fail(e.htStep || 'manifest', e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已自动重试' + e.htAttempts + '次' : ''), performUpdateFlow);
+            flow.fail(e.htStep || 'manifest', e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已重试' + e.htAttempts + '次' : ''), performUpdateFlow);
         } finally {
             _updating = false;
         }
@@ -1529,6 +1482,22 @@ echo __RESULT__
     const panelEl = document.querySelector(`#${MODAL}`);
     injectHelpButton(panelEl);
 
+    const checkUpdateInBackground = () => {
+        if (!state.installed || !state._deviceVersion) return;
+        fetchManifestWithProbe('v' + state._deviceVersion + '.json').then((raw) => {
+            if (!raw) return;
+            _manifest = parseManifest(raw);
+            if (!_manifest || _manifest.version === state._deviceVersion) return;
+            if (document.querySelector(`#${MODAL} #ht-update-btn`)) return;
+            const vt = document.querySelector(`#${MODAL} #ht-ver-tap`);
+            if (vt) {
+                vt.insertAdjacentHTML('afterend', '<span id="ht-update-btn" style="font-size:.5rem;color:#4ade80;cursor:pointer;margin-left:3px;-webkit-user-select:none;user-select:none;">更新 v' + esc(_manifest.version) + '</span>');
+                const btn = document.querySelector(`#${MODAL} #ht-update-btn`);
+                if (btn) btn.onclick = (e) => { e.stopPropagation(); handleUpdateClick(); };
+            }
+        }).catch(() => { cdnPurge(state._deviceVersion); });
+    };
+
     collapseGen('#collapse_ht_btn', '#collapse_ht', '#collapse_ht', async (newVal) => {
         if (newVal === 'open') {
             await readStatus();
@@ -1538,16 +1507,7 @@ echo __RESULT__
             await loadPolicyMap();
             renderIntoPanel();
             setAutoData(state.installed);
-            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).then(() => {
-                if (_manifest && state._deviceVersion && _manifest.version !== state._deviceVersion && !document.querySelector(`#${MODAL} #ht-update-btn`)) {
-                    const vt = document.querySelector(`#${MODAL} #ht-ver-tap`);
-                    if (vt) {
-                        vt.insertAdjacentHTML('afterend', '<span id="ht-update-btn" style="font-size:.5rem;color:#4ade80;cursor:pointer;margin-left:3px;-webkit-user-select:none;user-select:none;">更新 v' + esc(_manifest.version) + '</span>');
-                        const btn = document.querySelector(`#${MODAL} #ht-update-btn`);
-                        if (btn) btn.onclick = (e) => { e.stopPropagation(); handleUpdateClick(); };
-                    }
-                }
-            }).catch(() => { cdnPurge(state._deviceVersion); });
+            checkUpdateInBackground();
         } else {
             setAutoData(false);
         }
@@ -1569,16 +1529,7 @@ echo __RESULT__
             await loadPolicyMap();
             renderIntoPanel();
             setAutoData(state.installed);
-            cdnRetry(async () => { await fetchManifest(); if (!_manifest) throw htErr('', ''); }).then(() => {
-                if (_manifest && state._deviceVersion && _manifest.version !== state._deviceVersion && !document.querySelector(`#${MODAL} #ht-update-btn`)) {
-                    const vt = document.querySelector(`#${MODAL} #ht-ver-tap`);
-                    if (vt) {
-                        vt.insertAdjacentHTML('afterend', '<span id="ht-update-btn" style="font-size:.5rem;color:#4ade80;cursor:pointer;margin-left:3px;-webkit-user-select:none;user-select:none;">更新 v' + esc(_manifest.version) + '</span>');
-                        const btn = document.querySelector(`#${MODAL} #ht-update-btn`);
-                        if (btn) btn.onclick = (e) => { e.stopPropagation(); handleUpdateClick(); };
-                    }
-                }
-            }).catch(() => { cdnPurge(state._deviceVersion); });
+            checkUpdateInBackground();
         })();
     }
 })();

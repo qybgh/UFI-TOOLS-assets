@@ -11,7 +11,7 @@
     }
 
     // ─── constants ────────────────────────────────────────────────────────────
-    const _PREV_VER = '2.0.beta.10';
+    const _PREV_VER = '';
     const NAME = 'hotspot_traffic';
     const MODAL = 'hotspot_traffic_panel';
     const STYLE = 'hotspot_traffic_style';
@@ -40,15 +40,11 @@
     const GH_VERSION_BASE = `https://${CDN_ORIGIN}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/`;
     const CDN_RETRY_PER_NODE = 3;
     const CDN_RETRY_DELAY = 800;
-    let _cdnIdx = 0;
+    let _probedBestNode = null;
     const TRAFFIC_BIN_FILE = '/sdcard/hotspot_traffic';
     const PENDING_JS_FILE = '/data/local/tmp/_ht_pending.js';
 
-    const rotateCdn = () => { _cdnIdx = (_cdnIdx + 1) % (CDN_MIRRORS.length + 1); };
-    const cdnReplace = (url) => {
-        if (!url || _cdnIdx >= CDN_MIRRORS.length) return url;
-        return url.replace(CDN_ORIGIN, CDN_MIRRORS[_cdnIdx]);
-    };
+    const cdnUrlForNode = (url, node) => url ? url.replace(CDN_ORIGIN, node) : url;
     const cdnPurge = (ver) => { if (ver) run(`curl -sL --connect-timeout 5 --max-time 10 ${sq((GH_VERSION_BASE + 'v' + ver + '.json').replace(CDN_ORIGIN, 'purge.jsdelivr.net'))}`, 12000).catch(() => {}); };
 
 
@@ -86,19 +82,21 @@
     const CURL_RESUME_ECS = new Set(['18','28','56','92']);
     const htErr = (userMsg, detail) => { const e = new Error(userMsg); e.htDetail = String(detail ?? ''); return e; };
     const cdnRetry = async (fn) => {
+        const bestNode = await probeBestCdn();
+        const candidates = [bestNode, ...CDN_MIRRORS.filter(m => m !== bestNode), CDN_ORIGIN].filter((v, i, a) => a.indexOf(v) === i);
         let lastErr = null;
-        const total = (CDN_MIRRORS.length + 1) * CDN_RETRY_PER_NODE;
-        for (let n = 0; n < CDN_MIRRORS.length + 1; n++) {
-            for (let r = 0; r < CDN_RETRY_PER_NODE; r++) {
-                try { return await fn(n * CDN_RETRY_PER_NODE + r, r === 0); }
+        for (let n = 0; n < candidates.length; n++) {
+            const node = candidates[n];
+            const retries = n === 0 ? CDN_RETRY_PER_NODE : 2;
+            for (let r = 0; r < retries; r++) {
+                try { return await fn(node, r, r === 0); }
                 catch (e) {
                     lastErr = e;
-                    if (r < CDN_RETRY_PER_NODE - 1) await wait(CDN_RETRY_DELAY * Math.pow(2, r));
+                    if (r < retries - 1) await wait(CDN_RETRY_DELAY * Math.pow(2, r));
                 }
             }
-            if (n < CDN_MIRRORS.length) rotateCdn();
         }
-        if (lastErr && typeof lastErr === 'object') lastErr.htAttempts = total;
+        if (lastErr && typeof lastErr === 'object') lastErr.htAttempts = candidates.reduce((s, _, i) => s + (i === 0 ? CDN_RETRY_PER_NODE : 2), 0);
         throw lastErr;
     };
 
@@ -146,10 +144,7 @@
 
     let _manifest = null;
     const probeBestCdn = async () => {
-        const cacheTs = localStorage.getItem('ht_cdn_probe_ts');
-        if (cacheTs && Date.now() - parseInt(cacheTs) < 3600000) {
-            return localStorage.getItem('ht_cdn_probe_node') || CDN_ORIGIN;
-        }
+        if (_probedBestNode) return _probedBestNode;
         const candidates = [CDN_ORIGIN, ...CDN_MIRRORS];
         const results = [];
         for (const node of candidates) {
@@ -161,12 +156,10 @@
             const elapsed = Date.now() - start;
             if (String(r?.content || '').trim() === '200') results.push({ node, rtt: elapsed });
         }
-        const best = results.length > 0
+        _probedBestNode = results.length > 0
             ? results.sort((a, b) => a.rtt - b.rtt)[0].node
-            : CDN_ORIGIN;
-        localStorage.setItem('ht_cdn_probe_node', best);
-        localStorage.setItem('ht_cdn_probe_ts', String(Date.now()));
-        return best;
+            : CDN_MIRRORS[0];
+        return _probedBestNode;
     };
 
     const fetchManifestWithProbe = async (jsonFileName) => {
@@ -201,11 +194,11 @@
     };
 
     const downloadDeployScript = async (url, progress) => {
-        const bin = '/data/local/tmp/ht_deploy.sh';
+        const bin = '/data/local/tmp/ht_deploy';
         const b64 = bin + '.b64';
-        await cdnRetry(async (attempt, isNewNode) => {
-            if (attempt > 0) progress('dl_deploy', 'running', '重试 ' + (attempt + 1));
-            const _url = cdnReplace(url);
+        await cdnRetry(async (node, retryIdx, isNewNode) => {
+            if (retryIdx > 0 || node !== _probedBestNode) progress('dl_deploy', 'running', '重试');
+            const _url = cdnUrlForNode(url, node);
             if (isNewNode) await run(`rm -f ${sq(b64)}`, 2000);
             const resumeFlag = !isNewNode ? '-C - ' : '';
             const dlR = await run(
@@ -442,7 +435,9 @@ mkdir -p ${sq(DATA_DIR)}
 
     const executeDeploy = async (deployBin, manifest, prevVer, progress) => {
         await run(`rm -f ${sq(DATA_DIR + '/.deploy_heartbeat')}`);
-        const mirrors = [CDN_ORIGIN, ...CDN_MIRRORS].join(' ');
+        const bestNode = await probeBestCdn();
+        const allNodes = [bestNode, ...CDN_MIRRORS.filter(m => m !== bestNode), CDN_ORIGIN].filter((v, i, a) => a.indexOf(v) === i);
+        const mirrors = allNodes.join(' ');
         const cmd = [sq(deployBin), sq(manifest.version),
             sq(manifest.guardUrl), sq(manifest.diagUrl),
             sq(manifest.jsUrl), sq(manifest.md5),

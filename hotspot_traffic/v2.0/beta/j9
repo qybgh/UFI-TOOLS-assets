@@ -11,7 +11,7 @@
     }
 
     // ─── constants ────────────────────────────────────────────────────────────
-    const _PREV_VER = '2.0.beta.7';
+    const _PREV_VER = '2.0.beta.8';
     const NAME = 'hotspot_traffic';
     const MODAL = 'hotspot_traffic_panel';
     const STYLE = 'hotspot_traffic_style';
@@ -572,6 +572,7 @@ mkdir -p ${sq(DATA_DIR)}
             );
             ok('dl_deploy');
 
+            curStep = 'deploy';
             await executeDeploy(deployBin, _manifest, _PREV_VER || '', (step, status, detail) => {
                 flow.setStep(step, status, detail);
             });

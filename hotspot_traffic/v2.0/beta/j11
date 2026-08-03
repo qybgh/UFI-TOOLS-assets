@@ -11,7 +11,7 @@
     }
 
     // ─── constants ────────────────────────────────────────────────────────────
-    const _PREV_VER = '2.0.beta.9';
+    const _PREV_VER = '2.0.beta.10';
     const NAME = 'hotspot_traffic';
     const MODAL = 'hotspot_traffic_panel';
     const STYLE = 'hotspot_traffic_style';

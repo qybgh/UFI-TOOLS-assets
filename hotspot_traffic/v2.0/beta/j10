@@ -11,7 +11,7 @@
     }
 
     // ─── constants ────────────────────────────────────────────────────────────
-    const _PREV_VER = '2.0.beta.8';
+    const _PREV_VER = '2.0.beta.9';
     const NAME = 'hotspot_traffic';
     const MODAL = 'hotspot_traffic_panel';
     const STYLE = 'hotspot_traffic_style';
@@ -433,7 +433,7 @@ mkdir -p ${sq(DATA_DIR)}
                     const parts = line.split('|');
                     const step = parts[1], status = parts[2], detail = parts[3] || '';
                     if (['running','done','warn'].includes(status)) progress(step, status, detail);
-                    if (status === 'failed') { clearInterval(poll); reject(htErr(detail || step)); return; }
+                    if (status === 'failed') { progress(step, 'failed', detail); clearInterval(poll); const _e = htErr(detail || step); _e.htStep = step; reject(_e); return; }
                     if (step === 'complete' && status === 'done') { clearInterval(poll); resolve(); return; }
                 }
             }, 500);
@@ -585,7 +585,7 @@ mkdir -p ${sq(DATA_DIR)}
             createToast('已启用 v' + _manifest.version + '，2秒后刷新', 'green');
             setTimeout(() => location.reload(), 2000);
         } catch (e) {
-            flow.fail(curStep, e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已重试' + e.htAttempts + '次' : ''), startInstallFlow);
+            flow.fail(e?.htStep || curStep, e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已重试' + e.htAttempts + '次' : ''), startInstallFlow);
         } finally { state._installing = false; }
     };
 

@@ -36,7 +36,7 @@
     const DIAG_COOLDOWN = 1000 * 60 * 5;
     const REPORT_COOLDOWN = 1000 * 60 * 15;
     const CDN_ORIGIN = 'cdn.jsdelivr.net';
-    const CDN_MIRRORS = ['cdn.jsdmirror.cn','cdn.jsdmirror.com','jsd.onmicrosoft.cn'];
+    const CDN_MIRRORS = ['cdn.jsdmirror.com','jsd.onmicrosoft.cn'];
     const GH_VERSION_BASE = `https://${CDN_ORIGIN}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/`;
     const CDN_RETRY_PER_NODE = 3;
     const CDN_RETRY_DELAY = 800;
@@ -63,6 +63,7 @@
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+    const parseTs = (ts) => ts ? new Date(String(ts).replace(' ', 'T')).getTime() : NaN;
     const run = async (cmd, timeout = 30000) => {
         try {
             const r = await runShellWithRoot(cmd, timeout);
@@ -75,10 +76,7 @@
 
     const CURL_ERR_MAP = { 6:'网络域名解析失败', 7:'无法连接到服务器', 22:'服务器返回错误', 28:'网络连接超时', 35:'网络安全连接失败', 56:'网络连接中断（网络不稳定，可稍后重试）', 92:'HTTP/2帧错误（网络异常）' };
     const curlErrText = (c) => CURL_ERR_MAP[parseInt(c)] || ('网络传输异常(码' + c + ')');
-    const CURL_WK_SMALL = '--connect-timeout 8 --max-time 30 --speed-limit 1 --speed-time 20';
-    const CURL_WK_BIG = '--connect-timeout 8 --max-time 60 --speed-limit 1 --speed-time 45';
-    const RUN_TO_SMALL = 45000;
-    const RUN_TO_BIG = 75000;
+    const CURL_WK = '--connect-timeout 8 --max-time 60 --speed-limit 1 --speed-time 45';
     const CURL_RESUME_ECS = new Set(['18','28','56','92']);
     const htErr = (userMsg, detail) => { const e = new Error(userMsg); e.htDetail = String(detail ?? ''); return e; };
     const cdnRetry = async (fn) => {
@@ -148,7 +146,7 @@
         const candidates = [CDN_ORIGIN, ...CDN_MIRRORS];
         const results = [];
         for (const node of candidates) {
-            const testUrl = `https://${node}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/latest.json?_=${Date.now()}`;
+            const testUrl = `https://${node}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/_latest.json?_=${Date.now()}`;
             const start = Date.now();
             const r = await run(
                 `curl -sL --connect-timeout 3 --max-time 5 -w '%{http_code}' -o /dev/null ${sq(testUrl)}`, 8000
@@ -164,19 +162,31 @@
 
     const fetchManifestWithProbe = async (jsonFileName) => {
         const bestNode = await probeBestCdn();
-        const baseUrl = GH_VERSION_BASE.replace(CDN_ORIGIN, bestNode);
-        const url = baseUrl + jsonFileName + '?_=' + Date.now();
+        const url = GH_VERSION_BASE.replace(CDN_ORIGIN, bestNode) + jsonFileName + '?_=' + Date.now();
+        const tmp = '/data/local/tmp/_ht_manifest.tmp';
+        await run(`rm -f ${sq(tmp)}`, 1000);
         for (let retry = 0; retry < 3; retry++) {
-            const r = await run(`curl -sL ${CURL_WK_SMALL} ${sq(url)}`, RUN_TO_SMALL);
-            const text = String(r?.content || '').trim();
-            if (text && text[0] === '{') {
-                try {
-                    const j = JSON.parse(text);
-                    if (j.rev && j.guard && j.diag && j.deploy && j.js) return j;
-                } catch {}
+            const resumeFlag = retry > 0 ? '-C - ' : '';
+            const dlR = await run(
+                `curl -sL --fail ${resumeFlag}${CURL_WK} ${sq(url)} -o ${sq(tmp)}; ec=$?; [ "$ec" -eq 0 ] && echo __OK__ || echo "__FAIL__:$ec"`, 45000);
+            const out = String(dlR?.content || '');
+            if (out.includes('__OK__')) {
+                const rd = await run(`cat ${sq(tmp)}`, 3000);
+                const text = String(rd?.content || '').trim();
+                await run(`rm -f ${sq(tmp)}`, 1000);
+                if (text && text[0] === '{') {
+                    try {
+                        const j = JSON.parse(text);
+                        if (j.rev && j.guard && j.diag && j.deploy && j.js) return j;
+                    } catch {}
+                }
+            } else {
+                const m = out.match(/__FAIL__:(\d+)/);
+                if (!CURL_RESUME_ECS.has(m?.[1])) await run(`rm -f ${sq(tmp)}`, 1000);
             }
             if (retry < 2) await wait(CDN_RETRY_DELAY * Math.pow(2, retry));
         }
+        await run(`rm -f ${sq(tmp)}`, 1000);
         return null;
     };
 
@@ -202,7 +212,7 @@
             if (isNewNode) await run(`rm -f ${sq(b64)}`, 2000);
             const resumeFlag = !isNewNode ? '-C - ' : '';
             const dlR = await run(
-                `curl -sL --fail ${resumeFlag}${CURL_WK_BIG} ${sq(_url)} -o ${sq(b64)}; ec=$?; [ "$ec" -eq 0 ] && echo __DL_OK__ || echo "__DL_FAIL__:$ec"`, RUN_TO_BIG);
+                `curl -sL --fail ${resumeFlag}${CURL_WK} ${sq(_url)} -o ${sq(b64)}; ec=$?; [ "$ec" -eq 0 ] && echo __DL_OK__ || echo "__DL_FAIL__:$ec"`, 75000);
             if (!String(dlR?.content || '').includes('__DL_OK__')) {
                 const m = String(dlR?.content || '').match(/__DL_FAIL__:(\d+)/);
                 if (!CURL_RESUME_ECS.has(m?.[1])) await run(`rm -f ${sq(b64)}`, 2000);
@@ -314,7 +324,7 @@
         const diffAbs = Math.abs(diffSigned);
         const unattrSigned = iptTotal - deviceTotalBytes;
         const unattrAbs = Math.abs(unattrSigned);
-        const startMs = summary.scriptStartAt ? new Date(String(summary.scriptStartAt).replace(' ', 'T')).getTime() : NaN;
+        const startMs = parseTs(summary.scriptStartAt);
         const runtimeSec = Number.isFinite(startMs) ? Math.max(0, (Date.now() - startMs) / 1000) : 0;
         const isWarmup = runtimeSec < 1800 || sysDelta < 104857600;
         const diffThreshold = Math.max(sysDelta * 0.1, 10485760);
@@ -324,6 +334,17 @@
         const deviceTxBytes = deviceList.reduce((s, d) => s + (d.txBytes || 0), 0);
         const deviceRxBytes = deviceList.reduce((s, d) => s + (d.rxBytes || 0), 0);
         return { sysDelta, iptTotal, iptV4, iptV6, onlineCount, deviceCount, deviceTotalBytes, sysTxDelta, sysRxDelta, diffSigned, unattrSigned, diffCls, unattrCls, deviceTxBytes, deviceRxBytes };
+    };
+
+    const summaryHtmls = (m) => {
+        const _pv = Object.values(state.policyMap);
+        const blCount = _pv.filter(p => p.type === 'blacklist').length;
+        return [
+            `<div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}</div>${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}<div class="ht-summary-lbl">系统增量</div>`,
+            `<div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))} <span style="font-size:.48rem;opacity:.7">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap">v4:<span class="ht-up">${esc(htFormatBytes(m.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(m.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div>`,
+            `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${blCount ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">拉黑 <span class="ht-status-alert">${blCount}</span></div>` : ''}<div class="ht-summary-lbl">接入设备</div>`,
+            `<div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div>`,
+        ];
     };
 
     const resolveDisplayName = (device) => {
@@ -492,7 +513,7 @@ mkdir -p ${sq(DATA_DIR)}
                 <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="ht_flow_retry" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.25);color:#86efac;cursor:pointer;">重试</button><button id="ht_flow_close" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:inherit;cursor:pointer;">关闭</button></div>`;
             }
             return `
-                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">${esc(title)}<span id="ht_flow_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div>
+                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">${esc(title)}${qqBtnHtml('ht_flow_qq')}</div>
                 <div style="height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin:8px 0;overflow:hidden"><div style="height:100%;width:${pct}%;background:#4ade80;border-radius:2px;transition:width .3s"></div></div>
                 <div>${rows}</div>${failHtml}`;
         };
@@ -545,11 +566,11 @@ mkdir -p ${sq(DATA_DIR)}
 
             at('manifest');
             let rawManifest = await fetchManifestWithProbe(
-                _PREV_VER ? 'v' + _PREV_VER + '.json' : '_latest.json'
+                _PREV_VER ? 'v' + _PREV_VER + '.json' : 'latest.json'
             );
             if (!rawManifest && _PREV_VER) {
                 flow.setStep('manifest', 'running', '兜底源');
-                rawManifest = await fetchManifestWithProbe('_latest.json');
+                rawManifest = await fetchManifestWithProbe('latest.json');
             }
             if (!rawManifest) throw htErr('无法获取版本信息，请检查网络后重试');
             _manifest = parseManifest(rawManifest);
@@ -629,7 +650,7 @@ rm -rf ${sq(DATA_DIR)}
         let clicks = 0;
         const { el, close } = createFixedToast('ht_uninstall_confirm', `
             <div style="pointer-events:all;width:80vw;max-width:300px">
-                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">停用插件<span id="ht_uninstall_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div>
+                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">停用插件${qqBtnHtml('ht_uninstall_qq')}</div>
                 <div style="margin:10px 0;font-size:.64rem;line-height:1.6">停用后，流量统计数据将被清除，且无法找回。是否继续？</div>
                 <div style="display:flex;gap:6px;justify-content:flex-end"><button style="font-size:.62rem" id="ht_uninstall_confirm_confirm">确认</button><button style="font-size:.62rem" id="ht_uninstall_confirm_close">取消</button></div>
             </div>`);
@@ -720,17 +741,7 @@ rm -rf ${sq(DATA_DIR)}
 
             if (summary) {
                 const m = calcSummaryMetrics(summary, deviceList);
-
-                const si0 = el.querySelector('[data-ht="si_0"]');
-                const si1 = el.querySelector('[data-ht="si_1"]');
-                const si2 = el.querySelector('[data-ht="si_2"]');
-                const si3 = el.querySelector('[data-ht="si_3"]');
-                if (si0) si0.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}</div>${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}<div class="ht-summary-lbl">系统增量</div>`;
-                if (si1) si1.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))} <span style="font-size:.48rem;opacity:.7">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap">v4:<span class="ht-up">${esc(htFormatBytes(m.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(m.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div>`;
-                const _pv = Object.values(state.policyMap);
-                const blCount = _pv.filter(p => p.type === 'blacklist').length;
-                if (si2) si2.innerHTML = `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${blCount ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">拉黑 <span class="ht-status-alert">${blCount}</span></div>` : ''}<div class="ht-summary-lbl">接入设备</div>`;
-                if (si3) si3.innerHTML = `<div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div>`;
+                summaryHtmls(m).forEach((html, i) => { const n = el.querySelector(`[data-ht="si_${i}"]`); if (n && n.innerHTML !== html) n.innerHTML = html; });
             }
 
             const tbody = el.querySelector('tbody');
@@ -808,6 +819,7 @@ rm -rf ${sq(DATA_DIR)}
     };
 
     const groupTip = async (msg, color, ms) => { await copyToClipboard(QQ_GROUP); return createToast(msg, color, ms); };
+    const qqBtnHtml = (id) => `<span id="${id}" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span>`;
 
     const showLogPopup = async () => {
         const fetchLog = async () => {
@@ -815,7 +827,7 @@ rm -rf ${sq(DATA_DIR)}
             return String(r?.content ?? '').trim();
         };
         const logText = await fetchLog();
-        const { el: toastEl, close } = createFixedToast('ht_log_toast', `<div style="pointer-events:all;width:90vw;max-width:420px"><div class="title" style="margin:0 0 6px;display:flex;align-items:center;justify-content:space-between">运行日志<span id="ht_log_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div><textarea id="ht_log_area" readonly style="width:100%;height:40vh;font-size:.56rem;line-height:1.5;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:6px;color:inherit;resize:none;"></textarea><div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px"><button id="ht_log_refresh" style="font-size:.6rem">刷新</button><button id="ht_log_copy" style="font-size:.6rem">复制</button><button id="ht_log_close" style="font-size:.6rem">关闭</button></div></div>`);
+        const { el: toastEl, close } = createFixedToast('ht_log_toast', `<div style="pointer-events:all;width:90vw;max-width:420px"><div class="title" style="margin:0 0 6px;display:flex;align-items:center;justify-content:space-between">运行日志${qqBtnHtml('ht_log_qq')}</div><textarea id="ht_log_area" readonly style="width:100%;height:40vh;font-size:.56rem;line-height:1.5;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:6px;color:inherit;resize:none;"></textarea><div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px"><button id="ht_log_refresh" style="font-size:.6rem">刷新</button><button id="ht_log_copy" style="font-size:.6rem">复制</button><button id="ht_log_close" style="font-size:.6rem">关闭</button></div></div>`);
         const area = toastEl.querySelector('#ht_log_area');
         area.value = logText; area.scrollTop = area.scrollHeight;
         toastEl.querySelector('#ht_log_qq').onclick = () => groupTip('群号已复制', 'green');
@@ -1010,11 +1022,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             const m = calcSummaryMetrics(summary, deviceList);
             const zeroWarn = (summary.zeroStreak >= 3 && installed) ? `<div class="ht-status-alert" style="font-size:.55rem;margin-top:4px;">热点合计持续为0，可能受硬件加速影响，建议点击「诊断」排查</div>` : '';
             summaryHtml = `<div class="ht-summary-grid">
-            <div class="ht-summary-item" data-ht="si_0"><div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}</div>${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}<div class="ht-summary-lbl">系统增量</div></div>
-            <div class="ht-summary-item" data-ht="si_1"><div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))} <span style="font-size:.48rem;opacity:.7">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap">v4:<span class="ht-up">${esc(htFormatBytes(m.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(m.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div></div>
-            ${(() => { const _pv = Object.values(state.policyMap); const blCount = _pv.filter(p => p.type === 'blacklist').length; return `<div class="ht-summary-item" data-ht="si_2"><div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${blCount ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">拉黑 <span class="ht-status-alert">${blCount}</span></div>` : ''}<div class="ht-summary-lbl">接入设备</div></div>`; })()}
-            <div class="ht-summary-item" data-ht="si_3"><div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div></div>
-          </div>${zeroWarn}`;
+${summaryHtmls(m).map((html, i) => `<div class="ht-summary-item" data-ht="si_${i}">${html}</div>`).join('\n')}
+            </div>${zeroWarn}`;
         } else {
             summaryHtml = `<div class="ht-empty" style="font-size:.58rem;">${installed ? '已启用，等待首次采集数据' : '启用并等待首次采集后显示'}</div>`;
         }
@@ -1090,7 +1099,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const _resetDiag = () => { state.diagStatus = 'idle'; updateDiagBtn(); };
         try { await readStatus(); } catch (e) { state.summary = null; console.warn('[HT] readStatus in diag:', e); }
         if (state.summary && state.summary.scriptStartAt) {
-            const startMs = new Date(state.summary.scriptStartAt).getTime();
+            const startMs = parseTs(state.summary.scriptStartAt);
             if (!Number.isFinite(startMs)) { _resetDiag(); return createToast('插件数据尚未就绪，请等待采集完成后再诊断', 'pink'); }
             const elapsed = Date.now() - startMs;
             if (elapsed < DIAG_COOLDOWN) {
@@ -1105,27 +1114,16 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         }
         const now = new Date();
         if (now.getHours() === 0 && now.getMinutes() === 0) { _resetDiag(); return createToast('跨日数据重建中，请1分钟后再诊断', 'pink'); }
-        const probe = await run(`[ -f ${sq(DIAG_BIN_FILE)} ] && echo __READY__ || echo __MISS__`, 5000);
-        if (!String(probe?.content || '').includes('__READY__')) {
-            _resetDiag();
-            return createToast('诊断脚本未就绪，请停用后重新启用插件', 'pink');
-        }
-        const aliveChk = await run(`if [ -f ${sq(DIAG_LOCK_FILE)} ]; then _age=$(( $(date +%s) - $(stat -c %Y ${sq(DIAG_LOCK_FILE)} 2>/dev/null || echo 0) )); if [ "$_age" -gt 60 ]; then rm -f ${sq(DIAG_LOCK_FILE)}; echo __STALE__; else pid=$(awk '{print}' ${sq(DIAG_LOCK_FILE)} 2>/dev/null); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo __ALIVE__ || { rm -f ${sq(DIAG_LOCK_FILE)}; echo __DEAD__; }; fi; else echo __DEAD__; fi`, 5000);
-        const chkResult = String(aliveChk?.content || '');
-        if (chkResult.includes('__ALIVE__')) {
-            _resetDiag();
-            return createToast('诊断正在进行中，请等待完成', 'pink');
-        }
-        if (chkResult.includes('__STALE__')) {
-            createToast('检测到残留锁文件已清理，正在重新诊断...', 'green', 2000);
-        }
-        const verChk = await run(`timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null`, 5000);
-        const installedVer = String(verChk?.content || '').trim();
+        const preChk = await run(`_probe=0; [ -f ${sq(DIAG_BIN_FILE)} ] && _probe=1
+_lock=0; _stale=0; if [ -f ${sq(DIAG_LOCK_FILE)} ]; then _age=$(( $(date +%s) - $(stat -c %Y ${sq(DIAG_LOCK_FILE)} 2>/dev/null || echo 0) )); if [ "$_age" -gt 60 ]; then rm -f ${sq(DIAG_LOCK_FILE)}; _stale=1; else _p=$(awk '{print}' ${sq(DIAG_LOCK_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && _lock=1 || rm -f ${sq(DIAG_LOCK_FILE)}; fi; fi
+_ver=$(timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null)
+echo "$_probe|$_lock|$_stale|$_ver"`, 8000);
+        const [_probeOk, _lockAlive, _stale, _instVer] = String(preChk?.content || '').trim().split('|');
+        if (_probeOk !== '1') { _resetDiag(); return createToast('诊断脚本未就绪，请停用后重新启用插件', 'pink'); }
+        if (_lockAlive === '1') { _resetDiag(); return createToast('诊断正在进行中，请等待完成', 'pink'); }
+        if (_stale === '1') createToast('检测到残留锁文件已清理，正在重新诊断...', 'green', 2000);
         const currentVer = state._deviceVersion || '';
-        if (installedVer && currentVer && installedVer !== currentVer) {
-            _resetDiag();
-            return createToast(`插件已更新(${currentVer})，请重新启用插件以生效`, 'pink', 5000);
-        }
+        if (_instVer && currentVer && _instVer.trim() !== currentVer) { _resetDiag(); return createToast(`插件已更新(${currentVer})，请重新启用插件以生效`, 'pink', 5000); }
         const { close: closeLoading } = createFixedToast('ht_diag_loading', '诊断中...');
         await run(`rm -f ${sq(DIAG_RESULT_FILE)} 2>/dev/null
 cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_PROC} >/dev/null 2>&1 &`, 15000);
@@ -1185,7 +1183,7 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
 
         const text = JSON.stringify(j);
         const diagVer = j.version || state._deviceVersion || '';
-        const { el: toastEl, close } = createFixedToast('ht_diag_result_toast', `<div style="pointer-events:all;width:92vw;max-width:420px;max-height:75vh;display:flex;flex-direction:column"><div class="title" style="margin:0 0 6px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between">诊断结果<span style="font-size:.5rem;opacity:.35;margin-left:6px;font-weight:400">v${esc(diagVer)}</span><span id="ht_diag_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div>${(_manifest && _manifest.version && _manifest.version !== state._deviceVersion) ? '<div id="ht-diag-upd-banner" style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.12);color:#86efac;border-radius:8px;padding:8px 10px;margin:0 0 6px;cursor:pointer;font-size:.55rem"><span>发现新版本 v' + esc(_manifest.version) + '，点此查看</span><span style="opacity:.7">›</span></div>' : ''}<div style="flex:1;overflow:auto;min-height:0">${html}</div><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0"><button id="ht_diag_copy" class="ht-btn ht-btn-success" style="font-size:.62rem">复制报告</button><button id="ht_diag_report" class="ht-btn ht-btn-ghost" style="font-size:.62rem">上报</button><button id="ht_diag_redo" class="ht-btn ht-btn-ghost" style="font-size:.62rem">重新诊断</button><button id="ht_diag_close" class="ht-btn ht-btn-ghost" style="font-size:.62rem">关闭</button></div></div>`);
+        const { el: toastEl, close } = createFixedToast('ht_diag_result_toast', `<div style="pointer-events:all;width:92vw;max-width:420px;max-height:75vh;display:flex;flex-direction:column"><div class="title" style="margin:0 0 6px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between">诊断结果<span style="font-size:.5rem;opacity:.35;margin-left:6px;font-weight:400">v${esc(diagVer)}</span>${qqBtnHtml('ht_diag_qq')}</div>${(_manifest && _manifest.version && _manifest.version !== state._deviceVersion) ? '<div id="ht-diag-upd-banner" style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.12);color:#86efac;border-radius:8px;padding:8px 10px;margin:0 0 6px;cursor:pointer;font-size:.55rem"><span>发现新版本 v' + esc(_manifest.version) + '，点此查看</span><span style="opacity:.7">›</span></div>' : ''}<div style="flex:1;overflow:auto;min-height:0">${html}</div><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0"><button id="ht_diag_copy" class="ht-btn ht-btn-success" style="font-size:.62rem">复制报告</button><button id="ht_diag_report" class="ht-btn ht-btn-ghost" style="font-size:.62rem">上报</button><button id="ht_diag_redo" class="ht-btn ht-btn-ghost" style="font-size:.62rem">重新诊断</button><button id="ht_diag_close" class="ht-btn ht-btn-ghost" style="font-size:.62rem">关闭</button></div></div>`);
         toastEl.querySelector('#ht_diag_close').onclick = () => close();
         const _updBanner = toastEl.querySelector('#ht-diag-upd-banner');
         if (_updBanner) { _updBanner.onclick = () => { close(); setTimeout(() => performUpdateFlow(), 200); }; }
@@ -1332,7 +1330,7 @@ echo __RESULT__
             state._deviceVersion = _manifest.version;
             progress('complete', 'done');
         } catch (e) {
-            e.htStep = curStep;
+            if (!e.htStep) e.htStep = curStep;
             throw e;
         }
     };
@@ -1438,14 +1436,9 @@ echo __RESULT__
     const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。点击设备右侧 ✎ 可设置自定义名称或拉黑策略。<br><br><b>诊断</b><br>检测常见问题，可一键上报诊断结果给作者分析。`;
 
     const showHelp = () => {
-        const { el: toastEl, close } = createFixedToast('ht_help_toast', `
-            <div style="pointer-events:all;width:80vw;max-width:300px">
-                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">使用说明<span id="ht_help_qq" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span></div>
-                <div style="margin:10px 0;font-size:.64rem;line-height:1.6">${HELP_TEXT}</div>
-                <div style="text-align:right"><button style="font-size:.62rem" id="ht_help_dismiss">关闭</button></div>
-            </div>`);
-        toastEl.querySelector('#ht_help_qq').onclick = () => groupTip('群号已复制', 'green');
-        toastEl.querySelector('#ht_help_dismiss').onclick = () => close();
+        const { el, close } = createFixedToast('ht_help_toast', `<div style="pointer-events:all;width:80vw;max-width:300px"><div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">使用说明${qqBtnHtml('ht_help_qq')}</div><div style="margin:10px 0;font-size:.64rem;line-height:1.6">${HELP_TEXT}</div><div style="text-align:right"><button style="font-size:.62rem" id="ht_help_dismiss">关闭</button></div></div>`);
+        el.querySelector('#ht_help_qq').onclick = () => groupTip('群号已复制', 'green');
+        el.querySelector('#ht_help_dismiss').onclick = () => close();
     };
 
     const injectHelpButton = (container) => {
@@ -1505,39 +1498,31 @@ echo __RESULT__
         }).catch(() => { cdnPurge(state._deviceVersion); });
     };
 
-    collapseGen('#collapse_ht_btn', '#collapse_ht', '#collapse_ht', async (newVal) => {
-        if (newVal === 'open') {
-            await readStatus();
-            await recoverDaemonOnce();
-            await restoreDiagState();
-            if (state.installed) await loadData();
-            await loadPolicyMap();
-            renderIntoPanel();
-            setAutoData(state.installed);
-            checkUpdateInBackground();
-        } else {
-            setAutoData(false);
+    const initPanelState = async () => {
+        await readStatus();
+        if (!state.installed) {
+            const bootChk = await run(`grep -q ${sq(NAME)} ${sq(BOOT_SH_FILE)} 2>/dev/null && echo 1 || echo 0`, 3000);
+            if (String(bootChk?.content || '').includes('1')) {
+                await wait(800);
+                await readStatus();
+            }
         }
+        await recoverDaemonOnce();
+        await restoreDiagState();
+        if (state.installed) await loadData();
+        await loadPolicyMap();
+        renderIntoPanel();
+        setAutoData(state.installed);
+        checkUpdateInBackground();
+    };
+
+    collapseGen('#collapse_ht_btn', '#collapse_ht', '#collapse_ht', async (newVal) => {
+        if (newVal === 'open') await initPanelState();
+        else setAutoData(false);
     });
 
     if (localStorage.getItem('#collapse_ht') === 'open') {
-        (async () => {
-            await readStatus();
-            if (!state.installed) {
-                const bootChk = await run(`grep -q ${sq(NAME)} ${sq(BOOT_SH_FILE)} 2>/dev/null && echo 1 || echo 0`, 3000);
-                if (String(bootChk?.content || '').includes('1')) {
-                    await wait(800);
-                    await readStatus();
-                }
-            }
-            await recoverDaemonOnce();
-            await restoreDiagState();
-            if (state.installed) await loadData();
-            await loadPolicyMap();
-            renderIntoPanel();
-            setAutoData(state.installed);
-            checkUpdateInBackground();
-        })();
+        initPanelState().catch(e => console.warn('[HT] init error:', e));
     }
 })();
 //</script>

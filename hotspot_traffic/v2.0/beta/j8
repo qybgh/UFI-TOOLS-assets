@@ -11,7 +11,7 @@
     }
 
     // ─── constants ────────────────────────────────────────────────────────────
-    const _PREV_VER = '';
+    const _PREV_VER = '2.0.beta.7';
     const NAME = 'hotspot_traffic';
     const MODAL = 'hotspot_traffic_panel';
     const STYLE = 'hotspot_traffic_style';
@@ -179,7 +179,7 @@
             if (text && text[0] === '{') {
                 try {
                     const j = JSON.parse(text);
-                    if (j.rev && j.guard?.url && j.diag?.url && j.deploy?.url && j.js?.url) return j;
+                    if (j.rev && j.guard && j.diag && j.deploy && j.js) return j;
                 } catch {}
             }
             if (retry < 2) await wait(CDN_RETRY_DELAY * Math.pow(2, retry));
@@ -188,18 +188,19 @@
     };
 
     const parseManifest = (j) => {
-        if (!j || !j.rev || !j.guard?.url || !j.diag?.url || !j.deploy?.url || !j.js?.url) return null;
+        if (!j || !j.rev || !j.guard || !j.diag || !j.deploy || !j.js) return null;
         return {
             version: j.rev,
-            guardUrl: j.guard.url, guardMd5: j.guard.md5 || '',
-            diagUrl: j.diag.url, diagMd5: j.diag.md5 || '',
-            deployUrl: j.deploy.url, deployMd5: j.deploy.md5 || '',
-            jsUrl: j.js.url, jsMd5: j.js.md5 || '',
+            guardUrl: j.guard,
+            diagUrl: j.diag,
+            deployUrl: j.deploy,
+            jsUrl: j.js,
+            md5: j.md5 || '',
             notes: j.notes || '',
         };
     };
 
-    const downloadDeployScript = async (url, expectedMd5, progress) => {
+    const downloadDeployScript = async (url, progress) => {
         const bin = '/data/local/tmp/ht_deploy.sh';
         const b64 = bin + '.b64';
         await cdnRetry(async (attempt, isNewNode) => {
@@ -222,13 +223,6 @@
             }
             const dec = await run(`base64 -d ${sq(b64)} > ${sq(bin)} && rm -f ${sq(b64)} && echo __OK__`, 10000);
             if (!String(dec?.content || '').includes('__OK__')) throw htErr('部署脚本解码失败');
-            if (expectedMd5) {
-                const md5r = await run(`md5sum ${sq(bin)} | awk '{print $1}'`, 5000);
-                if (String(md5r?.content || '').trim() !== expectedMd5) {
-                    await run(`rm -f ${sq(bin)}`, 2000);
-                    throw htErr('部署脚本MD5不匹配');
-                }
-            }
         });
         await run(`chmod 755 ${sq(bin)}`);
         return bin;
@@ -415,18 +409,33 @@ mkdir -p ${sq(DATA_DIR)}
     const pollDeployHeartbeat = (progress, timeoutMs = 120000) => {
         return new Promise((resolve, reject) => {
             const startTs = Date.now();
-            let lastLine = '', lastBeatTs = Date.now();
+            const hbFile = DATA_DIR + '/.deploy_heartbeat';
+            let readLines = 0, lastBeatTs = Date.now(), hadBeat = false;
             const poll = setInterval(async () => {
                 if (Date.now() - startTs > timeoutMs) { clearInterval(poll); reject(htErr('部署超时')); return; }
-                if (Date.now() - lastBeatTs > 30000) { clearInterval(poll); reject(htErr('后台无响应')); return; }
-                const r = await run(`tail -n 1 ${sq(DATA_DIR + '/.deploy_heartbeat')} 2>/dev/null`, 2000);
-                const line = String(r?.content || '').trim();
-                if (!line || line === lastLine) return;
-                lastLine = line; lastBeatTs = Date.now();
-                const [, step, status, detail] = line.split('|');
-                if (['running','done','warn'].includes(status)) progress(step, status, detail || '');
-                if (status === 'failed') { clearInterval(poll); reject(htErr(detail || step)); return; }
-                if (step === 'complete' && status === 'done') { clearInterval(poll); resolve(); }
+                if (Date.now() - lastBeatTs > 70000) { clearInterval(poll); reject(htErr('后台无响应')); return; }
+                const r = await run(`awk -v s=${readLines} 'NR>s' ${sq(hbFile)} 2>/dev/null`, 2000);
+                const content = String(r?.content || '').trim();
+                if (!content) {
+                    if (hadBeat) {
+                        const chk = await run(`[ -f ${sq(hbFile)} ] && echo 1`, 1000);
+                        if (!String(chk?.content || '').trim()) {
+                            clearInterval(poll); reject(htErr('后台进程异常终止')); return;
+                        }
+                    }
+                    return;
+                }
+                const lines = content.split('\n');
+                readLines += lines.length;
+                lastBeatTs = Date.now();
+                hadBeat = true;
+                for (const line of lines) {
+                    const parts = line.split('|');
+                    const step = parts[1], status = parts[2], detail = parts[3] || '';
+                    if (['running','done','warn'].includes(status)) progress(step, status, detail);
+                    if (status === 'failed') { clearInterval(poll); reject(htErr(detail || step)); return; }
+                    if (step === 'complete' && status === 'done') { clearInterval(poll); resolve(); return; }
+                }
             }, 500);
         });
     };
@@ -435,9 +444,8 @@ mkdir -p ${sq(DATA_DIR)}
         await run(`rm -f ${sq(DATA_DIR + '/.deploy_heartbeat')}`);
         const mirrors = [CDN_ORIGIN, ...CDN_MIRRORS].join(' ');
         const cmd = [sq(deployBin), sq(manifest.version),
-            sq(manifest.guardUrl), sq(manifest.guardMd5),
-            sq(manifest.diagUrl), sq(manifest.diagMd5),
-            sq(manifest.jsUrl), sq(manifest.jsMd5),
+            sq(manifest.guardUrl), sq(manifest.diagUrl),
+            sq(manifest.jsUrl), sq(manifest.md5),
             sq(prevVer), sq(mirrors)].join(' ');
         const proc = run(cmd, 120000);
         await pollDeployHeartbeat(progress);
@@ -460,6 +468,7 @@ mkdir -p ${sq(DATA_DIR)}
         { id: 'complete',   label: '完成' },
     ];
     const UPDATE_DEPLOY_STEPS = DEPLOY_STEPS.filter(s => s.id !== 'env');
+    const VERIFY_STEP = { id: 'verify', label: '校验完整性' };
 
     const showFlowProgress = (title, steps, failPrefix = '启用失败') => {
         document.querySelector('#ht_flow_progress')?.remove();
@@ -508,6 +517,7 @@ mkdir -p ${sq(DATA_DIR)}
         redraw();
         return {
             setStep: (id, status, hint) => { if (st[id] !== undefined) { st[id] = status; stHint[id] = hint || ''; redraw(); } },
+            addStep: (afterId, stepDef) => { const idx = steps.findIndex(s => s.id === afterId); if (idx === -1) return; steps.splice(idx + 1, 0, stepDef); st[stepDef.id] = 'pending'; stHint[stepDef.id] = ''; redraw(); },
             fail: (id, userMsg, detail, onRetry) => {
                 if (st[id] !== undefined) st[id] = 'failed';
                 const detailHtml = esc(new Date().toLocaleString() + ' | 插件版本: ' + (_PREV_VER || '初装') + '→' + (_manifest?.version || '?') + ' | 阶段: ' + id + ' | 详情: ' + (detail || '(无)') + ' | UA: ' + (navigator.userAgent || '').slice(0, 80) + ((navigator.userAgent || '').length > 80 ? '…' : ''));
@@ -550,13 +560,14 @@ mkdir -p ${sq(DATA_DIR)}
             _manifest = parseManifest(rawManifest);
             if (!_manifest) throw htErr('版本信息格式异常');
             ok('manifest');
+            if (_manifest.md5) flow.addStep('dl_js', VERIFY_STEP);
 
             await cleanResidue();
             await run(`mkdir -p ${sq(DATA_DIR)}`);
 
             at('dl_deploy');
             const deployBin = await downloadDeployScript(
-                _manifest.deployUrl, _manifest.deployMd5,
+                _manifest.deployUrl,
                 (id, st, hint) => flow.setStep(id, st, hint)
             );
             ok('dl_deploy');
@@ -1314,7 +1325,7 @@ echo __RESULT__
 
             curStep = 'dl_deploy';
             progress('dl_deploy', 'running');
-            const deployBin = await downloadDeployScript(_manifest.deployUrl, _manifest.deployMd5, progress);
+            const deployBin = await downloadDeployScript(_manifest.deployUrl, progress);
             progress('dl_deploy', 'done');
 
             curStep = 'deploy';
@@ -1357,7 +1368,7 @@ echo __RESULT__
         const confirmed = await showUpdateConfirm(_manifest.version, _manifest.notes);
         if (!confirmed) return;
         _updating = true;
-        const flow = showFlowProgress('更新热点流量监控', UPDATE_DEPLOY_STEPS, '更新失败');
+        const flow = showFlowProgress('更新热点流量监控', _manifest.md5 ? [...UPDATE_DEPLOY_STEPS.slice(0, UPDATE_DEPLOY_STEPS.findIndex(s => s.id === 'prepare_js')), VERIFY_STEP, ...UPDATE_DEPLOY_STEPS.slice(UPDATE_DEPLOY_STEPS.findIndex(s => s.id === 'prepare_js'))] : UPDATE_DEPLOY_STEPS, '更新失败');
         try {
             await performUpdate((id, st, hint) => flow.setStep(id, st, hint));
             flow.done();

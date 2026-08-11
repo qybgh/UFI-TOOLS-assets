@@ -139,8 +139,8 @@
         _lastMtimeKey: '',
     };
 
-
     let _manifest = null;
+    let _lastManifestErr = '';
     const probeBestCdn = async () => {
         if (_probedBestNode) return _probedBestNode;
         const candidates = [CDN_ORIGIN, ...CDN_MIRRORS];
@@ -160,33 +160,53 @@
         return _probedBestNode;
     };
 
-    const fetchManifestWithProbe = async (jsonFileName) => {
-        const bestNode = await probeBestCdn();
+    const fetchManifestWithProbe = async (jsonFileName, node, retries) => {
+        const bestNode = node || await probeBestCdn();
         const url = GH_VERSION_BASE.replace(CDN_ORIGIN, bestNode) + jsonFileName + '?_=' + Date.now();
         const tmp = '/data/local/tmp/_ht_manifest.tmp';
+        const maxR = retries || 3;
+        const codes = [];
         await run(`rm -f ${sq(tmp)}`, 1000);
-        for (let retry = 0; retry < 3; retry++) {
+        for (let retry = 0; retry < maxR; retry++) {
             const resumeFlag = retry > 0 ? '-C - ' : '';
             const dlR = await run(
                 `curl -sL --fail ${resumeFlag}${CURL_WK} ${sq(url)} -o ${sq(tmp)}; ec=$?; [ "$ec" -eq 0 ] && echo __OK__ || echo "__FAIL__:$ec"`, 45000);
             const out = String(dlR?.content || '');
             if (out.includes('__OK__')) {
-                const rd = await run(`cat ${sq(tmp)}`, 3000);
+                const rd = await run(`awk '{print}' ${sq(tmp)}`, 3000);
                 const text = String(rd?.content || '').trim();
                 await run(`rm -f ${sq(tmp)}`, 1000);
                 if (text && text[0] === '{') {
                     try {
                         const j = JSON.parse(text);
                         if (j.rev && j.guard && j.diag && j.deploy && j.js) return j;
-                    } catch {}
-                }
+                        codes.push('bad_fields');
+                    } catch { codes.push('json_err'); }
+                } else { codes.push('not_json'); }
             } else {
                 const m = out.match(/__FAIL__:(\d+)/);
+                codes.push(m?.[1] || '?');
                 if (!CURL_RESUME_ECS.has(m?.[1])) await run(`rm -f ${sq(tmp)}`, 1000);
             }
-            if (retry < 2) await wait(CDN_RETRY_DELAY * Math.pow(2, retry));
+            if (retry < maxR - 1) await wait(CDN_RETRY_DELAY * Math.pow(2, retry));
         }
         await run(`rm -f ${sq(tmp)}`, 1000);
+        _lastManifestErr = bestNode + ':' + jsonFileName + '=[' + codes.join(',') + ']';
+        return null;
+    };
+
+    const fetchManifestAllNodes = async (jsonFile) => {
+        const errs = [];
+        let raw = await fetchManifestWithProbe(jsonFile);
+        if (raw) return raw;
+        errs.push(_lastManifestErr);
+        const nodes = [CDN_ORIGIN, ...CDN_MIRRORS].filter(n => n !== _probedBestNode);
+        for (const n of nodes) {
+            raw = await fetchManifestWithProbe(jsonFile, n, 2);
+            if (raw) return raw;
+            errs.push(_lastManifestErr);
+        }
+        _lastManifestErr = errs.join(' | ');
         return null;
     };
 
@@ -370,7 +390,7 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
         const procPart = text.includes('__PROC__') ? text.split('__PROC__')[1].split('__DATA__')[0] : '';
         const dataPart = text.includes('__DATA__') ? text.split('__DATA__')[1].split('__VER__')[0] : '';
         const verPart = text.includes('__VER__') ? text.split('__VER__')[1].trim() : '';
-        state._deviceVersion = verPart || '';
+        state._deviceVersion = (verPart || '').replace(/^pending:/, '');
         state.installed = bootPart.includes(NAME) && procPart.includes('running=1');
         if (dataPart.trim()) {
             try {
@@ -426,8 +446,8 @@ mkdir -p ${sq(DATA_DIR)}
             const hbFile = DATA_DIR + '/.deploy_heartbeat';
             let readLines = 0, lastBeatTs = Date.now(), hadBeat = false;
             const poll = setInterval(async () => {
-                if (Date.now() - startTs > timeoutMs) { clearInterval(poll); reject(htErr('部署超时')); return; }
-                if (Date.now() - lastBeatTs > 70000) { clearInterval(poll); reject(htErr('后台无响应')); return; }
+                if (Date.now() - startTs > timeoutMs) { clearInterval(poll); reject(htErr('部署超时(' + Math.round((Date.now() - startTs) / 1000) + 's)')); return; }
+                if (Date.now() - lastBeatTs > 70000) { clearInterval(poll); reject(htErr('后台无响应(心跳中断' + Math.round((Date.now() - lastBeatTs) / 1000) + 's)')); return; }
                 const r = await run(`awk -v s=${readLines} 'NR>s' ${sq(hbFile)} 2>/dev/null`, 2000);
                 const content = String(r?.content || '').trim();
                 if (!content) {
@@ -559,20 +579,20 @@ mkdir -p ${sq(DATA_DIR)}
         const ok = (id) => flow.setStep(id, 'done');
         try {
             at('env');
-            const probeR = await run(`iptables -w 5 -L FORWARD -n 2>/dev/null && echo __OK__ || echo __FAIL__`, 8000);
+            const probeR = await run(`iptables -w 5 -L FORWARD -n 2>&1 && echo __OK__`, 8000);
             if (!String(probeR?.content || '').includes('__OK__'))
-                throw htErr('设备网络组件检查未通过', 'iptables探测失败');
+                throw htErr('设备网络组件检查未通过', String(probeR?.content || '').trim().slice(0, 200));
             ok('env');
 
             at('manifest');
-            let rawManifest = await fetchManifestWithProbe(
+            let rawManifest = await fetchManifestAllNodes(
                 _PREV_VER ? 'v' + _PREV_VER + '.json' : 'latest.json'
             );
             if (!rawManifest && _PREV_VER) {
                 flow.setStep('manifest', 'running', '兜底源');
-                rawManifest = await fetchManifestWithProbe('latest.json');
+                rawManifest = await fetchManifestAllNodes('latest.json');
             }
-            if (!rawManifest) throw htErr('无法获取版本信息，请检查网络后重试');
+            if (!rawManifest) throw htErr('无法获取版本信息，请检查网络后重试', _lastManifestErr);
             _manifest = parseManifest(rawManifest);
             if (!_manifest) throw htErr('版本信息格式异常');
             ok('manifest');
@@ -969,6 +989,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         <input type="text" id="ht_dev_name" value="${esc(customName)}" placeholder="${esc(displayName)}" style="flex:1;padding:6px 10px;background:#1e2030;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:.7rem;outline:none">
         <button id="ht_dev_name_clear" style="padding:5px 10px;font-size:.62rem;border:1px solid #334155;border-radius:5px;background:transparent;color:#94a3b8;cursor:pointer">清除</button>
       </div>
+      ${!customName && (!displayName || displayName === '未知设备') ? '<div style="font-size:.54rem;color:#64748b;line-height:1.4;margin:-4px 0 6px">\u{1F4A1} 设备重新连接WiFi后可自动识别名称，也可在上方手动设置</div>' : ''}
       <div style="border-top:1px solid #1e293b;margin:10px 0"></div>
       <div style="display:flex;flex-direction:column;gap:8px;font-size:.7rem;color:#e2e8f0">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="normal" ${curPol==='normal'?'checked':''} style="accent-color:#667eea"> 正常（无限制）</label>
@@ -1209,7 +1230,7 @@ _m=$(${sq(JQ)} '.auto_reported=true' ${sq(DIAG_RESULT_FILE)} 2>/dev/null); [ -n 
             if (autoReported) return groupTip('当前诊断已上报，请加群跟进（群号已复制）', 'green', 3000);
             if (_lastReportTime && Date.now() - _lastReportTime < REPORT_COOLDOWN) return groupTip(`上报间隔未达${Math.round(REPORT_COOLDOWN / 60000)}分钟，请稍后重新诊断或加群跟进（群号已复制）`, 'pink');
             try {
-                const whRes = await run(`cat ${sq(WEBHOOK_FILE)} 2>/dev/null`, 3000);
+                const whRes = await run(`awk '{print}' ${sq(WEBHOOK_FILE)} 2>/dev/null`, 3000);
                 const webhookUrl = String(whRes?.content || '').trim();
                 if (!webhookUrl) return groupTip('未获取到上报通道，请加群反馈（群号已复制）', 'red');
                 const body = JSON.stringify({msgtype: 'text', text: {content: text}});
@@ -1311,7 +1332,7 @@ echo __RESULT__
             progress('manifest', 'running');
             if (!_manifest) {
                 const raw = await fetchManifestWithProbe('v' + state._deviceVersion + '.json');
-                if (!raw) throw htErr('无法获取版本信息');
+                if (!raw) throw htErr('无法获取版本信息', _lastManifestErr);
                 _manifest = parseManifest(raw);
                 if (!_manifest) throw htErr('版本信息格式异常');
             }

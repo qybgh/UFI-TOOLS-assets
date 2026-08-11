@@ -4,5 +4,5 @@
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/di_0",
     "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
     "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/beta/j_0811",
-    "notes": "1.修复1.0版本更新后版本号显示异常的问题\n2.修复跨日关机后历史数据丢失的问题\n\n提醒:2.0版本后台会默认保留近60天统计数据，前提是插件在此期间未被手动停用过，后续版本将新增历史数据查询功能"
+    "notes": "1.修复历史版本更新到2.0版本后版本号显示异常的问题\n2.修复跨日关机后历史数据丢失的问题\n\n提醒:2.0版本后台会默认保留近60天统计数据，前提是插件在此期间未被手动停用过，后续版本将新增历史数据查询功能"
 }

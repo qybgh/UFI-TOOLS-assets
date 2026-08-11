@@ -32,6 +32,7 @@
     const BOOT_SH_FILE = '/sdcard/ufi_tools_boot.sh';
     const BOOT_LINE = `cp /sdcard/hotspot_traffic ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`;
     const WEBHOOK_FILE = `${DATA_DIR}/.webhook`;
+    const CUSTOM_NAMES_FILE = `${DATA_DIR}/custom_names.txt`;
     const QQ_GROUP = '1019849819';
     const DIAG_COOLDOWN = 1000 * 60 * 5;
     const REPORT_COOLDOWN = 1000 * 60 * 15;
@@ -298,10 +299,15 @@
     };
 
     // ─── helpers ──────────────────────────────────────────────────────────────
-    const getCustomName = (mac) => localStorage.getItem(LS_KEY + 'name_' + mac) || '';
+    const _pendingNames = {};
     const setCustomName = (mac, name) => {
-        if (name.trim()) localStorage.setItem(LS_KEY + 'name_' + mac, name.trim());
-        else localStorage.removeItem(LS_KEY + 'name_' + mac);
+        const uMac = mac.toUpperCase();
+        _pendingNames[uMac] = name.trim();
+        if (name.trim()) {
+            run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; printf '%s\\n' ${sq(uMac + '|' + name.trim())} >> "$_f.tmp"; mv "$_f.tmp" "$_f"`);
+        } else {
+            run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; mv "$_f.tmp" "$_f"`);
+        }
     };
     const htFormatBytes = (bytes) => {
         const num = parseInt(bytes) || 0;
@@ -368,9 +374,11 @@
     };
 
     const resolveDisplayName = (device) => {
-        const customName = getCustomName(device.mac);
-        const hostname = (device.hostname || '').trim();
-        return customName || hostname || '未知设备';
+        const uMac = (device.mac || '').toUpperCase();
+        if (uMac in _pendingNames) {
+            return _pendingNames[uMac] || (device.hostname || '').trim() || '未知设备';
+        }
+        return (device.customName || '').trim() || (device.hostname || '').trim() || '未知设备';
     };
 
     // ─── config read/write ────────────────────────────────────────────────────
@@ -401,6 +409,12 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
                     state.summary = parsed.summary || null;
                 }
             } catch { }
+        }
+        for (const mac of Object.keys(_pendingNames)) {
+            const dev = state.dataCache?.devices?.[mac];
+            if (!dev) continue;
+            if (_pendingNames[mac] === '' && !dev.customName) delete _pendingNames[mac];
+            else if (_pendingNames[mac] && dev.customName === _pendingNames[mac]) delete _pendingNames[mac];
         }
     };
 
@@ -977,7 +991,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         let curPolicy = {type: 'normal'};
         try { curPolicy = JSON.parse((_r?.content || '').trim()); } catch (e) { console.warn('[HT] parse policy json failed:', e, _r?.content); }
         const curPol = curPolicy.type || 'normal';
-        const customName = getCustomName(mac) || '';
+        const uMac = mac.toUpperCase();
+        const customName = (uMac in _pendingNames) ? (_pendingNames[uMac] || '') : (state.dataCache?.devices?.[mac]?.customName || '').trim();
         const masked = maskMac(mac);
         const content = `
       <div style="font-size:.72rem;color:#94a3b8;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -1454,7 +1469,7 @@ echo __RESULT__
     };
 
     // ─── help ─────────────────────────────────────────────────────────────────
-    const HELP_TEXT = `<b>功能</b><br>统计热点接入设备的流量，每天 0 点自动重置。<br><br><b>流量概览</b><br>系统增量 = 插件启用后或今日开始的系统总流量；热点合计 = 热点转发的流量；偏差 = 两者之差，主UFI本机进程流量和可能的硬件加速偏差。未归属 = 热点合计与设备合计的差值，通常占比较小。<br><br><b>设备明细</b><br>按设备展示上传/下载流量。点击设备右侧 ✎ 可设置自定义名称或拉黑策略。<br><br><b>诊断</b><br>检测常见问题，可一键上报诊断结果给作者分析。`;
+    const HELP_TEXT = `<b>功能</b><br>统计每个热点接入设备的实时流量和网速，数据每天 0 点自动归档到历史记录并重置。<br><br><b>流量概览</b><br>系统增量 = 今日 WAN 口总流量；热点合计 = 所有热点转发流量；偏差 = 两者之差（含本机流量和硬件加速偏移）；未归属 = 热点合计中暂未分配到具体设备的部分。<br><br><b>设备明细</b><br>按设备展示上传/下载流量和实时网速。点击 ✎ 可设置自定义名称或将设备拉黑（禁止联网）。点击「设备明细」按钮可折叠/展开列表。<br><br><b>诊断</b><br>检测问题，可一键上报结果给作者远程分析。启用后需等待 5 分钟才可诊断。<br><br><b>版本更新</b><br>插件会自动检查新版本，有更新时面板会出现绿色提示。也可连续点击版本号 3 次手动检查。`;
 
     const showHelp = () => {
         const { el, close } = createFixedToast('ht_help_toast', `<div style="pointer-events:all;width:80vw;max-width:300px"><div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">使用说明${qqBtnHtml('ht_help_qq')}</div><div style="margin:10px 0;font-size:.64rem;line-height:1.6">${HELP_TEXT}</div><div style="text-align:right"><button style="font-size:.62rem" id="ht_help_dismiss">关闭</button></div></div>`);

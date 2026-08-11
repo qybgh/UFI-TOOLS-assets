@@ -685,7 +685,7 @@ rm -rf ${sq(DATA_DIR)}
         const { el, close } = createFixedToast('ht_uninstall_confirm', `
             <div style="pointer-events:all;width:80vw;max-width:300px">
                 <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">停用插件${qqBtnHtml('ht_uninstall_qq')}</div>
-                <div style="margin:10px 0;font-size:.64rem;line-height:1.6">停用后，流量统计数据将被清除，且无法找回。是否继续？</div>
+                <div style="margin:10px 0;font-size:.64rem;line-height:1.6">停用后，流量统计数据将被清除且无法找回；自定义设备名称也会被清除，需重新设置（自动识别的名称会在重新启用并且设备重新连接后恢复）。是否继续？</div>
                 <div style="display:flex;gap:6px;justify-content:flex-end"><button style="font-size:.62rem" id="ht_uninstall_confirm_confirm">确认</button><button style="font-size:.62rem" id="ht_uninstall_confirm_close">取消</button></div>
             </div>`);
         el.querySelector('#ht_uninstall_qq').onclick = () => groupTip('群号已复制', 'green');

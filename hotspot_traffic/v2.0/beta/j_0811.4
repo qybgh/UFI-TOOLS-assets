@@ -299,10 +299,10 @@
     };
 
     // ─── helpers ──────────────────────────────────────────────────────────────
-    const _pendingNames = {};
+    const _pnKey = (mac) => LS_KEY + 'pn_' + mac.toUpperCase();
     const setCustomName = (mac, name) => {
         const uMac = mac.toUpperCase();
-        _pendingNames[uMac] = name.trim();
+        localStorage.setItem(_pnKey(uMac), name.trim());
         if (name.trim()) {
             run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; printf '%s\\n' ${sq(uMac + '|' + name.trim())} >> "$_f.tmp"; mv "$_f.tmp" "$_f"`);
         } else {
@@ -375,8 +375,9 @@
 
     const resolveDisplayName = (device) => {
         const uMac = (device.mac || '').toUpperCase();
-        if (uMac in _pendingNames) {
-            return _pendingNames[uMac] || (device.hostname || '').trim() || '未知设备';
+        const pending = localStorage.getItem(_pnKey(uMac));
+        if (pending !== null) {
+            return pending || (device.hostname || '').trim() || '未知设备';
         }
         return (device.customName || '').trim() || (device.hostname || '').trim() || '未知设备';
     };
@@ -410,11 +411,12 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
                 }
             } catch { }
         }
-        for (const mac of Object.keys(_pendingNames)) {
-            const dev = state.dataCache?.devices?.[mac];
-            if (!dev) continue;
-            if (_pendingNames[mac] === '' && !dev.customName) delete _pendingNames[mac];
-            else if (_pendingNames[mac] && dev.customName === _pendingNames[mac]) delete _pendingNames[mac];
+        for (const mac of Object.keys(state.dataCache?.devices || {})) {
+            const pv = localStorage.getItem(_pnKey(mac));
+            if (pv === null) continue;
+            const dev = state.dataCache.devices[mac];
+            if (pv === '' && !dev.customName) localStorage.removeItem(_pnKey(mac));
+            else if (pv && dev.customName === pv) localStorage.removeItem(_pnKey(mac));
         }
     };
 
@@ -992,7 +994,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         try { curPolicy = JSON.parse((_r?.content || '').trim()); } catch (e) { console.warn('[HT] parse policy json failed:', e, _r?.content); }
         const curPol = curPolicy.type || 'normal';
         const uMac = mac.toUpperCase();
-        const customName = (uMac in _pendingNames) ? (_pendingNames[uMac] || '') : (state.dataCache?.devices?.[mac]?.customName || '').trim();
+        const pendingVal = localStorage.getItem(_pnKey(uMac));
+        const customName = (pendingVal !== null) ? (pendingVal || '') : (state.dataCache?.devices?.[mac]?.customName || '').trim();
         const masked = maskMac(mac);
         const content = `
       <div style="font-size:.72rem;color:#94a3b8;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">

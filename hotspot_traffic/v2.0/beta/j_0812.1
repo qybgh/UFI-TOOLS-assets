@@ -2169,7 +2169,20 @@ echo __RESULT__
     };
 
     // ─── help ─────────────────────────────────────────────────────────────────
-    const HELP_TEXT = `<b>功能</b><br>统计每个热点接入设备的实时流量和网速，数据每天 0 点自动归档到历史记录并重置。<br><br><b>流量概览</b><br>系统增量 = 今日 WAN 口总流量；热点合计 = 所有热点转发流量；偏差 = 两者之差（含本机流量和硬件加速偏移）；未归属 = 热点合计中暂未分配到具体设备的部分。<br><br><b>设备明细</b><br>按设备展示上传/下载流量和实时网速。点击 ✎ 可设置自定义名称或将设备拉黑（禁止联网）。点击「设备明细」按钮可折叠/展开列表。<br><br><b>诊断</b><br>检测问题，可一键上报结果给作者远程分析。启用后需等待 5 分钟才可诊断。<br><br><b>版本更新</b><br>插件会自动检查新版本，有更新时面板会出现绿色提示。也可连续点击版本号 3 次手动检查。`;
+    const HELP_TEXT = `<div style="line-height:1.7">
+<div style="color:#a5b4fc;font-weight:600;margin-bottom:2px">常用操作</div>
+<ul style="margin:0 0 8px;padding-left:1.2em">
+<li>点 ✎ 给设备命名或拉黑，点「设备明细」可折叠列表</li>
+<li>点「用量报告」看历史用量、趋势与设备分类</li>
+<li>点「日志」/「诊断结果」查看运行日志或上报问题</li>
+</ul>
+<div style="color:#a5b4fc;font-weight:600;margin-bottom:2px">小知识</div>
+<ul style="margin:0;padding-left:1.2em">
+<li>每天 0 点自动归档，历史数据保留 60 天</li>
+<li>同名设备自动合并，随机 MAC 命名后归入已知</li>
+<li>新功能按钮右上角有红点提示，点过即消</li>
+</ul>
+</div>`;
 
     const showHelp = () => {
         const { el, close } = createFixedToast('ht_help_toast', `<div style="pointer-events:all;width:80vw;max-width:300px"><div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">使用说明${qqBtnHtml('ht_help_qq')}</div><div style="margin:10px 0;font-size:.64rem;line-height:1.6">${HELP_TEXT}</div><div style="text-align:right"><button style="font-size:.62rem" id="ht_help_dismiss">关闭</button></div></div>`);
@@ -2224,7 +2237,7 @@ echo __RESULT__
         _newdotPanel.addEventListener('click', (e) => {
             const el = e.target.closest('[data-newkey]');
             if (el && el.classList.contains('ht-newdot')) markSeen(el.dataset.newkey);
-        });
+        }, true);
     }
 
     const checkUpdateInBackground = () => {

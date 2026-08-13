@@ -369,6 +369,7 @@
         if (parts.length !== 6) return mac;
         return `${parts[0]}:${parts[1]}:**:**:**:${parts[5]}`;
     };
+    const toggleMacMask = (el) => { el.textContent = el.textContent === el.dataset.macfull ? el.dataset.macmasked : el.dataset.macfull; };
 
     const sortDevices = (devicesMap) => Object.values(devicesMap || {}).sort((a, b) => {
         if (a.online && !b.online) return -1;
@@ -1114,7 +1115,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-rpt-section{margin-top:0;}
       #${MODAL} .ht-rpt-chart-hd{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
       #${MODAL} .ht-rpt-chart-title{font-size:.6rem;font-weight:600;opacity:.8;}
-      #${MODAL} .ht-rpt-chart-dev{font-size:.52rem;color:#86efac;margin-left:6px;font-weight:400;}
+      #${MODAL} .ht-rpt-chart-dev{font-size:.52rem;opacity:.5;margin-left:6px;font-weight:400;}
       #${MODAL} .ht-rpt-list-hint{font-size:.5rem;opacity:.45;padding:2px 4px 4px;color:rgba(255,255,255,.7);}
       #${MODAL} .ht-rpt-chart-reset{font-size:.48rem;padding:2px 8px;border-radius:4px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.6);cursor:pointer;margin-left:auto;}
       #${MODAL} .ht-rpt-chart{position:relative;height:80px;margin:4px 0;padding:4px 0;}
@@ -1136,15 +1137,12 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-rpt-tag-type{background:rgba(34,197,94,.15);color:#86efac;}
       #${MODAL} .ht-rpt-tag-heavy{background:rgba(251,191,36,.15);color:#fde047;}
       #${MODAL} .ht-rpt-rand-day{margin-bottom:2px;}
-      #${MODAL} .ht-rpt-rand-day summary{font-size:.54rem;opacity:.85;cursor:pointer;padding:3px 0;list-style:none;}
+      #${MODAL} .ht-rpt-rand-day summary{font-size:.58rem;opacity:.85;cursor:pointer;padding:4px 0;list-style:none;}
       #${MODAL} .ht-rpt-rand-day summary::-webkit-details-marker{display:none;}
       #${MODAL} .ht-rpt-rand-day summary::before{content:'';display:inline-block;width:0;height:0;border-left:4px solid currentColor;border-top:3px solid transparent;border-bottom:3px solid transparent;margin-right:6px;vertical-align:middle;transition:transform .15s;}
       #${MODAL} .ht-rpt-rand-day[open] summary::before{transform:rotate(90deg);}
-      #${MODAL} .ht-rpt-rand-list{font-size:.54rem;opacity:.85;padding-left:12px;padding-bottom:4px;}
-      #${MODAL} .ht-rpt-rand-list > div{padding:2px 0;display:flex;align-items:center;gap:6px;}
-      #${MODAL} .ht-rpt-rand-dev{display:flex;flex-direction:column;min-width:0;flex:1;}
-      #${MODAL} .ht-rpt-rand-dev .nm{font-size:.52rem;opacity:.95;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-      #${MODAL} .ht-rpt-rand-dev .mc{font-size:.44rem;opacity:.55;}
+      #${MODAL} .ht-rpt-rand-list{padding-left:10px;padding-bottom:4px;}
+      #${MODAL} .ht-rpt-row-flex.ht-rpt-rand-row{cursor:default;background:transparent !important;}
       #${MODAL} .ht-rpt-row-flex{display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;transition:background .15s;border-radius:6px;}
       #${MODAL} .ht-rpt-row-flex:last-child{border-bottom:none;}
       #${MODAL} .ht-rpt-row-flex:hover{background:rgba(255,255,255,.03);}
@@ -1333,7 +1331,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const labelsHtml = buildChartLabels(chartData, svgW);
         const chartHtml = `<div class="ht-card ht-rpt-section">
           <div class="ht-rpt-chart-hd">
-            <span class="ht-rpt-chart-title">每日流量趋势${chartDevName ? `<span class="ht-rpt-chart-dev">${esc(reportDevLabel(chartDevName))}</span>` : ''}</span>
+            <span class="ht-rpt-chart-title">每日流量趋势${chartDevName ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(chartDevName))})</span>` : '<span class="ht-rpt-chart-dev">(设备合计)</span>'}</span>
             ${chartDevName ? `<button id="ht_rpt_chart_reset" class="ht-rpt-chart-reset">× 返回全部</button>` : ''}
           </div>
           <div class="ht-rpt-chart" id="ht_rpt_chart">
@@ -1372,7 +1370,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                 return `<div class="ht-rpt-row-flex ht-rpt-row${isActive ? ' ht-rpt-on' : ''}" data-rpt-dev="${esc(dev.name)}" data-rpt-type="named">
                   <span class="ht-rpt-row-idx">${i + 1}</span>
                   <button class="ht-edit-mini" data-rpt-edit="${esc(dev.name)}" data-rpt-edit-type="named">✎</button>
-                  <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(dev.name)}${macCount > 1 ? ` <span style="font-size:.48rem;opacity:.5">[${macCount}个MAC]</span>` : ''}${tagsHtml}</div>
+                  <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(dev.name)} <span style="font-size:.48rem;opacity:.5">[${macCount}个MAC]</span>${tagsHtml}</div>
                     <div class="ht-rpt-row-meta">活跃 ${activeDays}/${s.days}天 · 日均 ${esc(htFormatBytes(activeDays > 0 ? Math.round(total / activeDays) : 0))} · 占比 ${pct}%</div></div>
                   <span class="ht-rpt-row-bytes">${esc(htFormatBytes(total))}${uldl}</span>
                 </div>`;
@@ -1389,7 +1387,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
 
         const randTotal = rpt.random.reduce((s, d) => s + d.devices.reduce((ss, dd) => ss + dd.bytes, 0), 0);
         const randCount = new Set(rpt.random.flatMap(d => d.devices.map(dd => dd.mac))).size;
-        let randomListHtml = `<div style="font-size:.56rem;opacity:.75;margin-bottom:6px;">本周期共出现 ${randCount} 个随机MAC设备，合计 ${esc(htFormatBytes(randTotal))}${randCount > 0 ? '（命名后归入已知设备 · 或在设备端关闭随机MAC）' : ''}</div>`;
+        let randomListHtml = `<div style="font-size:.56rem;opacity:.75;margin-bottom:6px;">本周期共 ${randCount} 个随机MAC设备，合计 ${esc(htFormatBytes(randTotal))}${randCount > 0 ? '（命名后归入已知设备，或在设备端关闭随机MAC）' : ''}</div>`;
         rpt.random.forEach((day, idx) => {
             const dayTotal = day.devices.reduce((s, d) => s + d.bytes, 0);
             const dayTx = day.devices.reduce((s, d) => s + (d.tx || 0), 0);
@@ -1400,7 +1398,12 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             const dateLabel = day.date.slice(5).replace('-', '月') + '日';
             randomListHtml += `<details class="ht-rpt-rand-day"${idx === 0 ? ' open' : ''}>
               <summary>${dateLabel} · ${day.devices.length}台 · ${esc(htFormatBytes(dayTotal))} <span style="font-size:.48rem;opacity:.7;font-weight:400;"><span class="ht-up">↑${esc(htFormatBytes(dayTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(dayRx))}</span></span></summary>
-              <div class="ht-rpt-rand-list">${displayDevs.map(d => `<div><button class="ht-edit-mini" data-rpt-edit="${esc(d.mac)}" data-rpt-edit-type="random" style="font-size:.5rem;padding:2px 3px;">✎</button><div class="ht-rpt-rand-dev"><span class="nm">${esc(d.hostname || rpt.macHostnames[d.mac.toUpperCase()] || '未知设备')}</span><span class="mc">${esc(maskMac(d.mac))}</span></div><span style="margin-left:auto;flex-shrink:0;text-align:right;">${esc(htFormatBytes(d.bytes))}<div class="ht-rpt-row-uldl"><span class="ht-up">↑${esc(htFormatBytes(d.tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(d.rx))}</span></div></span></div>`).join('')}${overflowCount > 0 ? `<div style="opacity:.7">其他 ${overflowCount} 台 · ${esc(htFormatBytes(overflowBytes))}</div>` : ''}</div>
+              <div class="ht-rpt-rand-list">${displayDevs.map(d => `<div class="ht-rpt-row-flex ht-rpt-rand-row">
+                <button class="ht-edit-mini" data-rpt-edit="${esc(d.mac)}" data-rpt-edit-type="random">✎</button>
+                <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(d.hostname || rpt.macHostnames[d.mac.toUpperCase()] || '未知设备')}</div>
+                  <div class="ht-rpt-row-meta"><span class="ht-rpt-mac-tog" data-macfull="${esc(d.mac)}" data-macmasked="${esc(maskMac(d.mac))}" style="cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);">${esc(maskMac(d.mac))}</span></div></div>
+                <span class="ht-rpt-row-bytes">${esc(htFormatBytes(d.bytes))}<div class="ht-rpt-row-uldl"><span class="ht-up">↑${esc(htFormatBytes(d.tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(d.rx))}</span></div></span>
+              </div>`).join('')}${overflowCount > 0 ? `<div class="ht-rpt-row-flex ht-rpt-rand-row" style="opacity:.6;justify-content:center;font-size:.54rem;">其他 ${overflowCount} 台 · ${esc(htFormatBytes(overflowBytes))}</div>` : ''}</div>
             </details>`;
         });
 
@@ -1535,7 +1538,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         }
 
         if (hdEl) {
-            const devLabel = devKey ? `<span class="ht-rpt-chart-dev">${esc(reportDevLabel(devKey))}</span>` : '';
+            const devLabel = devKey ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(devKey))})</span>` : '<span class="ht-rpt-chart-dev">(设备合计)</span>';
             const resetBtn = devKey ? `<button id="ht_rpt_chart_reset" class="ht-rpt-chart-reset">× 返回全部</button>` : '';
             hdEl.innerHTML = `<span class="ht-rpt-chart-title">每日流量趋势${devLabel}</span>${resetBtn}`;
         }
@@ -1562,7 +1565,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
               <div class="title" style="margin:0 0 8px">修改设备名称</div>
               <div style="margin-bottom:8px"><input id="ht_rpt_edit_name" type="text" value="${esc(editKey)}" style="width:100%;padding:6px 10px;background:#1e2030;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:.68rem;outline:none"></div>
               <div style="font-size:.54rem;opacity:.5;margin-bottom:4px;">名称相同的设备已合并统计，关联的MAC地址 (${macList.length}个):</div>
-              <div id="ht_rpt_edit_macs">${macList.map(mac => { const _hn = rs.report.macHostnames[mac.toUpperCase()] || ''; return `<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;font-size:.54rem;gap:6px;"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_hn ? esc(_hn) + ' · ' : ''}<span class="ht-rpt-mac-tog" data-macfull="${esc(mac)}" data-macmasked="${esc(maskMac(mac))}" style="opacity:.55;cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);" title="点击查看/隐藏完整MAC">${esc(maskMac(mac))}</span></span><button class="ht-btn ht-btn-ghost" style="font-size:.48rem;padding:1px 6px;flex-shrink:0;" data-rpt-remove-mac="${esc(mac)}">移除</button></div>`; }).join('')}</div>
+              <div id="ht_rpt_edit_macs">${macList.map(mac => { const _hn = rs.report.macHostnames[mac.toUpperCase()] || ''; return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;font-size:.6rem;gap:8px;border-bottom:1px solid rgba(255,255,255,.06);"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_hn ? esc(_hn) + ' · ' : ''}<span class="ht-rpt-mac-tog" data-macfull="${esc(mac)}" data-macmasked="${esc(maskMac(mac))}" style="opacity:.55;cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);" title="点击查看/隐藏完整MAC">${esc(maskMac(mac))}</span></span><button class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:3px 10px;flex-shrink:0;" data-rpt-remove-mac="${esc(mac)}">移除</button></div>`; }).join('')}</div>
               <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px"><button id="ht_rpt_edit_ok" class="ht-btn" style="font-size:.6rem;padding:4px 12px;">确认</button><button id="ht_rpt_edit_cancel" class="ht-btn ht-btn-ghost" style="font-size:.6rem;padding:4px 12px;">取消</button></div>
             </div>`);
             let removedMacs = [];
@@ -1570,7 +1573,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             el.addEventListener('click', (e) => {
                 const tog = e.target.closest('.ht-rpt-mac-tog');
                 if (tog) {
-                    tog.textContent = tog.textContent === tog.dataset.macfull ? tog.dataset.macmasked : tog.dataset.macfull;
+                    toggleMacMask(tog);
                     return;
                 }
                 const removeBtn = e.target.closest('[data-rpt-remove-mac]');
@@ -1619,7 +1622,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             el.querySelector('#ht_rpt_edit_cancel').onclick = () => close();
             el.addEventListener('click', (e) => {
                 const tog = e.target.closest('.ht-rpt-mac-tog');
-                if (tog) tog.textContent = tog.textContent === tog.dataset.macfull ? tog.dataset.macmasked : tog.dataset.macfull;
+                if (tog) toggleMacMask(tog);
             });
             el.querySelector('#ht_rpt_edit_ok').onclick = async () => {
                 const newName = (el.querySelector('#ht_rpt_edit_name')?.value || '').trim();
@@ -1688,6 +1691,11 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             if (editBtn) {
                 e.stopPropagation();
                 showReportEditDialog(editBtn.dataset.rptEditType, editBtn.dataset.rptEdit);
+                return;
+            }
+            const macTog = e.target.closest('.ht-rpt-mac-tog');
+            if (macTog) {
+                toggleMacMask(macTog);
                 return;
             }
             const hot = e.target.closest('.ht-rpt-hot');

@@ -1120,12 +1120,12 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-rpt-rand-day[open] summary::before{transform:rotate(90deg);}
       #${MODAL} .ht-rpt-rand-list{padding-left:10px;padding-bottom:4px;}
       #${MODAL} .ht-rpt-row-flex.ht-rpt-rand-row{cursor:default;background:transparent !important;}
-      #${MODAL} .ht-rpt-row-flex{display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;transition:background .15s;border-radius:6px;}
+      #${MODAL} .ht-rpt-row-flex{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;transition:background .15s;border-radius:6px;}
       #${MODAL} .ht-rpt-row-flex:last-child{border-bottom:none;}
       #${MODAL} .ht-rpt-row-flex:hover{background:rgba(255,255,255,.03);}
       #${MODAL} .ht-rpt-row-flex.ht-rpt-on{background:linear-gradient(90deg,rgba(74,222,128,.13),rgba(74,222,128,.02));box-shadow:inset 3px 0 0 #4ade80;}
       #${MODAL} .ht-summary-item.ht-rpt-on{background:rgba(74,222,128,.08);border-radius:8px;box-shadow:inset 0 -2px 0 #4ade80;}
-      #${MODAL} .ht-rpt-row-idx{opacity:.4;font-size:.54rem;min-width:14px;text-align:center;}
+      #${MODAL} .ht-rpt-row-idx{opacity:.4;font-size:.54rem;min-width:10px;text-align:right;}
       #${MODAL} .ht-rpt-row-info{flex:1;min-width:0;max-width:62%;}
       #${MODAL} .ht-rpt-row-name{font-weight:600;font-size:.62rem;display:flex;align-items:center;flex-wrap:wrap;gap:2px;}
       #${MODAL} .ht-rpt-row-meta{font-size:.5rem;opacity:.4;margin-top:1px;line-height:1.3;}
@@ -1378,7 +1378,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
 
         const randTotal = rpt.random.reduce((s, d) => s + d.devices.reduce((ss, dd) => ss + dd.bytes, 0), 0);
         const randCount = new Set(rpt.random.flatMap(d => d.devices.map(dd => dd.mac))).size;
-        let randomListHtml = `<div style="font-size:.56rem;opacity:.75;margin-bottom:6px;">本周期共 ${randCount} 个随机MAC设备，合计 ${esc(htFormatBytes(randTotal))}${randCount > 0 ? '（命名后归入已知设备，或在设备端关闭随机MAC）' : ''}</div>`;
+        let randomListHtml = `<div style="font-size:.56rem;opacity:.75;margin-bottom:6px;">本周期共 ${randCount} 台随机MAC设备，合计 ${esc(htFormatBytes(randTotal))}${randCount > 0 ? '（命名后归入已知设备，或在设备端关闭随机MAC）' : ''}</div>`;
         rpt.random.forEach((day, idx) => {
             const dayTotal = day.devices.reduce((s, d) => s + d.bytes, 0);
             const dayTx = day.devices.reduce((s, d) => s + (d.tx || 0), 0);

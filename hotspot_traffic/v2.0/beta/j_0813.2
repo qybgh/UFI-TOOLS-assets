@@ -40,6 +40,12 @@
     const BOOT_LINE = `cp /sdcard/hotspot_traffic ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`;
     const WEBHOOK_FILE = `${DATA_DIR}/.webhook`;
     const CUSTOM_NAMES_FILE = `${DATA_DIR}/custom_names.txt`;
+    const MODE_SYS = 'sd';
+    const MODE_IPT = 'it';
+    const MODE_DEV = 'dt';
+    const DEFAULT_CHART_MODE = MODE_SYS;
+    const CHART_MODE_LABEL = { [MODE_SYS]: '系统增量', [MODE_IPT]: '热点合计', [MODE_DEV]: '设备合计' };
+    const LS_DEVICES_COLLAPSED = LS_KEY + 'devices_collapsed';
     const QQ_GROUP = '1019849819';
     const DIAG_COOLDOWN = 1000 * 60 * 5;
     const REPORT_COOLDOWN = 1000 * 60 * 15;
@@ -54,7 +60,6 @@
 
     const cdnUrlForNode = (url, node) => url ? url.replace(CDN_ORIGIN, node) : url;
     const cdnPurge = (ver) => { if (ver) run(`curl -sL --connect-timeout 5 --max-time 10 ${sq((GH_VERSION_BASE + 'v' + ver + '.json').replace(CDN_ORIGIN, 'purge.jsdelivr.net'))}`, 12000).catch(() => {}); };
-
 
     const _M = [0x4b,0x41,0x4e,0x4f,0x5f,0x50,0x4c,0x55,0x47,0x49,0x4e].map(c=>String.fromCharCode(c)).join('');
     const _PS = `<!-- [${_M}_START]`;
@@ -480,10 +485,7 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
         if (state.installed) createToast('检测到后台服务已停止，已自动恢复', 'green');
     };
 
-    const cleanResidue = async () => {
-        try {
-            await run(`
-_p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
+    const KILL_DAEMON_SH = `_p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
 if [ -n "$_p" ]; then
 kill -15 "$_p" 2>/dev/null
 _i=0; while kill -0 "$_p" 2>/dev/null && [ "$_i" -lt 15 ]; do sleep 0.1; _i=$((_i+1)); done
@@ -494,7 +496,12 @@ _tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
 kill -9 "$_p" 2>/dev/null
 fi
 rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
-rm -rf ${sq(DATA_DIR + '/.lock_dir')}
+rm -rf ${sq(DATA_DIR + '/.lock_dir')}`;
+
+    const cleanResidue = async () => {
+        try {
+            await run(`
+${KILL_DAEMON_SH}
 sed -i '/${NAME}/d' ${sq(BOOT_SH_FILE)} 2>/dev/null
 rm -f /sdcard/hotspot_traffic /sdcard/hotspot_diag ${sq(LOG_FILE)} ${TRAFFIC_PROC} ${DIAG_PROC}
 rm -rf ${sq(DATA_DIR)}
@@ -704,21 +711,11 @@ mkdir -p ${sq(DATA_DIR)}
         try {
             await run(`
 sed -i '/${NAME}/d' ${sq(BOOT_SH_FILE)} 2>/dev/null
-_p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
-if [ -n "$_p" ]; then
-kill -15 "$_p" 2>/dev/null
-_i=0; while kill -0 "$_p" 2>/dev/null && [ "$_i" -lt 15 ]; do sleep 0.1; _i=$((_i+1)); done
-_ep=$(awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null)
-[ -n "$_ep" ] && kill -9 "$_ep" 2>/dev/null
-_tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
-[ -n "$_tp" ] && kill -9 "$_tp" 2>/dev/null
-kill -9 "$_p" 2>/dev/null
-fi
-rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
-rm -rf ${sq(DATA_DIR + '/.lock_dir')}
+${KILL_DAEMON_SH}
 rm -f ${sq(TRAFFIC_BIN_FILE)} ${sq(DIAG_BIN_FILE)} ${sq(LOG_FILE)} ${TRAFFIC_PROC} ${DIAG_PROC} ${sq(WEBHOOK_FILE)} ${sq(TRAFFIC_BIN_FILE + '.b64')} ${sq(DIAG_BIN_FILE + '.b64')} ${sq(PENDING_JS_FILE)}
 rm -rf ${sq(DATA_DIR)}
 `, 10000);
+            try { Object.keys(localStorage).filter(k => k.startsWith(LS_KEY) || k === '#collapse_ht').forEach(k => localStorage.removeItem(k)); } catch (e) {}
             state.installed = false; state.dataCache = null; state.lastUpdated = ''; state.summary = null;
             clearDiagState();
             createToast('热点流量监控已停用');
@@ -770,23 +767,8 @@ rm -rf ${sq(DATA_DIR)}
         if (_reportDataCache.key === cacheKey && _reportDataCache.data && Date.now() - _reportDataCache.ts < 300000) {
             return _reportDataCache.data;
         }
-        const cmd = `_dir=${sq(DATA_DIR + '/data_history')}
-_out='{"days":['
-_first=1
-for f in "$_dir"/*.json; do
-  [ -f "$f" ] || continue
-  _d="\${f##*/}"; _d="\${_d%.json}"
-  [ "$_d" \\< ${sq(startDate)} ] && continue
-  [ "$_d" \\> ${sq(endDate)} ] && continue
-  _j=$(timeout 2s ${sq(JQ)} -c '{date:.date,devices:[.devices|to_entries[]|{m:.key,h:.value.hostname,c:.value.customName,tx:.value.txBytes,rx:.value.rxBytes}],sd:.summary.sysDeltaBytes,it:.summary.iptTotalBytes,dt:.summary.deviceTotalBytes}' "$f" 2>/dev/null)
-  [ -z "$_j" ] && continue
-  [ "$_first" -eq 0 ] && _out="$_out,"
-  _out="$_out$_j"
-  _first=0
-done
-_out="$_out]}"
-printf '%s' "$_out"`;
-        const result = await run(cmd, 15000);
+        const cmd = `timeout 30s ${sq(JQ)} --arg sd ${sq(startDate)} --arg ed ${sq(endDate)} -sc '[.[] | select(.date >= $sd and .date <= $ed) | {date:.date,devices:[.devices|to_entries[]|{m:.key,h:.value.hostname,c:.value.customName,tx:.value.txBytes,rx:.value.rxBytes}],sd:.summary.sysDeltaBytes,sdTx:.summary.sysDeltaTxBytes,sdRx:.summary.sysDeltaRxBytes,it:.summary.iptTotalBytes,itV4:.summary.iptTotalV4Bytes,itV6:.summary.iptTotalV6Bytes,dt:.summary.deviceTotalBytes}] | {days:.}' ${sq(DATA_DIR + '/data_history')}/*.json 2>/dev/null || echo '{"days":[]}'`;
+        const result = await run(cmd, 35000);
         _reportDataCache.key = cacheKey;
         _reportDataCache.data = result;
         _reportDataCache.ts = Date.now();
@@ -833,20 +815,23 @@ printf '%s' "$_out"`;
         const totalDeviceBytes = [...named, ...stable].reduce((s, d) => s + d.totalTx + d.totalRx, 0) + randomByDay.reduce((s, d) => s + d.devices.reduce((ss, dd) => ss + dd.bytes, 0), 0);
 
         const fullDates = (startDate && endDate) ? dateRange(startDate, endDate) : rawDays.map(d => d.date);
-        const dtByDate = {};
-        rawDays.forEach(d => { dtByDate[d.date] = d.dt || 0; });
+        const dtByDate = {}, sdByDate = {}, itByDate = {};
+        rawDays.forEach(d => { dtByDate[d.date] = d.dt || 0; sdByDate[d.date] = d.sd || 0; itByDate[d.date] = d.it || 0; });
+
+        let _sysTotal = 0, _sysTx = 0, _sysRx = 0, _iptTotal = 0, _iptV4 = 0, _iptV6 = 0, _devTotal = 0, _devTx = 0, _devRx = 0;
+        for (const _d of rawDays) { _sysTotal += _d.sd || 0; _sysTx += _d.sdTx || 0; _sysRx += _d.sdRx || 0; _iptTotal += _d.it || 0; _iptV4 += _d.itV4 || 0; _iptV6 += _d.itV6 || 0; _devTotal += _d.dt || 0; for (const _dd of _d.devices) { _devTx += _dd.tx || 0; _devRx += _dd.rx || 0; } }
 
         return {
             summary: {
-                sysTotal: rawDays.reduce((s, d) => s + (d.sd || 0), 0),
-                iptTotal: rawDays.reduce((s, d) => s + (d.it || 0), 0),
-                devTotal: rawDays.reduce((s, d) => s + (d.dt || 0), 0),
+                sysTotal: _sysTotal, sysTx: _sysTx, sysRx: _sysRx,
+                iptTotal: _iptTotal, iptV4: _iptV4, iptV6: _iptV6,
+                devTotal: _devTotal, devTx: _devTx, devRx: _devRx,
                 days: fullDates.length,
                 knownCount: named.length + stable.length,
                 totalCount: named.length + stable.length + new Set(randomByDay.flatMap(d => d.devices.map(dd => dd.mac))).size,
                 totalDeviceBytes,
             },
-            dailyTotals: fullDates.map(date => ({ date, dt: dtByDate[date] || 0 })),
+            dailyTotals: fullDates.map(date => ({ date, sd: sdByDate[date] || 0, it: itByDate[date] || 0, dt: dtByDate[date] || 0 })),
             named, stable, random: randomByDay.sort((a, b) => b.date.localeCompare(a.date)),
             macHostnames: Object.keys(macHostRaw).reduce((m, k) => { m[k] = macHostRaw[k].h; return m; }, {}),
         };
@@ -919,6 +904,42 @@ printf '%s' "$_out"`;
         } finally { dataLoading = false; }
     };
 
+    const _patchSummaryGrid = (el, deviceList) => {
+        const summary = state.summary;
+        if (!summary) return;
+        const m = calcSummaryMetrics(summary, deviceList);
+        summaryHtmls(m).forEach((html, i) => { const n = el.querySelector(`[data-ht="si_${i}"]`); if (n && n.innerHTML !== html) n.innerHTML = html; });
+    };
+
+    const _isDeviceOrderChanged = (tbody, deviceList) => {
+        const domMacs = [];
+        tbody.querySelectorAll('tr[data-mac]').forEach(tr => domMacs.push(tr.dataset.mac));
+        const newMacs = deviceList.map(d => d.mac);
+        return domMacs.length !== newMacs.length || domMacs.some((m, i) => m !== newMacs[i]);
+    };
+
+    const _patchDeviceRow = (tr, device, index) => {
+        const displayName = resolveDisplayName(device);
+        const txBytes = device.txBytes || 0;
+        const rxBytes = device.rxBytes || 0;
+        const totalBytes = txBytes + rxBytes;
+        const p = (attr, val) => { const n = tr.querySelector(`[data-ht="${attr}"]`); if (n && n.textContent !== val) n.textContent = val; };
+        p('idx', String(index + 1));
+        const isMe = device.ip && device.ip === state._clientIp;
+        const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
+        const nameHtml = `${esc(displayName)}${meTag}`;
+        const nameEl = tr.querySelector('[data-ht="name"]');
+        if (nameEl && nameEl.innerHTML !== nameHtml) nameEl.innerHTML = nameHtml;
+        p('ip', device.ip || '');
+        const tfEl = tr.querySelector('[data-ht="tf"]');
+        const tfHtml = renderTrafficRateCell(device, totalBytes, txBytes, rxBytes);
+        if (tfEl && tfEl.innerHTML !== tfHtml) tfEl.innerHTML = tfHtml;
+        const polEl = tr.querySelector('[data-ht="pol"]');
+        if (polEl) { const pol = state.policyMap[device.mac]; const wantBg = pol?.type === 'blacklist' ? '#f87171' : ''; if (polEl.style.background !== wantBg) { polEl.style.display = pol ? 'inline-block' : 'none'; polEl.style.background = wantBg; } }
+        const dot = tr.querySelector('[data-ht="dot"]');
+        if (dot) { const cls = device.online ? 'ht-dot ht-dot-green' : 'ht-dot ht-dot-gray'; if (dot.className !== cls) dot.className = cls; }
+    };
+
     const patchDataArea = async (preloaded) => {
         if (dataLoading) return;
         dataLoading = true;
@@ -926,70 +947,20 @@ printf '%s' "$_out"`;
             await loadData(preloaded);
             const el = document.querySelector(`#${MODAL} #ht_data_area`);
             if (!el || !state.dataCache) return;
-
-            const devicesMap = state.dataCache.devices || {};
-            const deviceList = sortDevices(devicesMap);
-            const summary = state.summary;
-
-            if (summary) {
-                const m = calcSummaryMetrics(summary, deviceList);
-                summaryHtmls(m).forEach((html, i) => { const n = el.querySelector(`[data-ht="si_${i}"]`); if (n && n.innerHTML !== html) n.innerHTML = html; });
-            }
-
+            const deviceList = sortDevices(state.dataCache.devices || {});
+            _patchSummaryGrid(el, deviceList);
             const tbody = el.querySelector('tbody');
-            if (!tbody) {
-                if (deviceList.length > 0) { el.innerHTML = renderDataArea(); initDataDelegate(); }
-                return;
-            }
-
+            if (!tbody) { if (deviceList.length > 0) { el.innerHTML = renderDataArea(); initDataDelegate(); } return; }
             if (tbody.querySelector('tr') && (!tbody.querySelector('[data-ht="tf"]') || !tbody.querySelector('td:nth-child(2) > [data-edit-mac]') || !tbody.querySelector('td:nth-child(4)'))) {
                 tbody.innerHTML = deviceList.map((d, i) => renderDeviceRow(d, i)).join('');
-            }
-
-            const domMacs = [];
-            tbody.querySelectorAll('tr[data-mac]').forEach(tr => domMacs.push(tr.dataset.mac));
-            const newMacs = deviceList.map(d => d.mac);
-            const orderChanged = domMacs.length !== newMacs.length || domMacs.some((m, i) => m !== newMacs[i]);
-
-            if (orderChanged) {
+            } else if (_isDeviceOrderChanged(tbody, deviceList)) {
                 tbody.innerHTML = deviceList.map((d, i) => renderDeviceRow(d, i)).join('');
             } else {
-                deviceList.forEach((device, index) => {
-                    const tr = tbody.querySelector(`tr[data-mac="${esc(device.mac)}"]`);
-                    if (!tr) return;
-                    const displayName = resolveDisplayName(device);
-                    const txBytes = device.txBytes || 0;
-                    const rxBytes = device.rxBytes || 0;
-                    const totalBytes = txBytes + rxBytes;
-                    const p = (attr, val) => { const n = tr.querySelector(`[data-ht="${attr}"]`); if (n && n.textContent !== val) n.textContent = val; };
-                    p('idx', String(index + 1));
-                    const isMe = device.ip && device.ip === state._clientIp;
-                    const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
-                    const nameHtml = `${esc(displayName)}${meTag}`;
-                    const nameEl = tr.querySelector('[data-ht="name"]');
-                    if (nameEl && nameEl.innerHTML !== nameHtml) nameEl.innerHTML = nameHtml;
-                    p('ip', device.ip || '');
-                    const tfEl = tr.querySelector('[data-ht="tf"]');
-                    const tfHtml = renderTrafficRateCell(device, totalBytes, txBytes, rxBytes);
-                    if (tfEl && tfEl.innerHTML !== tfHtml) tfEl.innerHTML = tfHtml;
-                    const polEl = tr.querySelector('[data-ht="pol"]');
-                    if (polEl) {
-                        const pol = state.policyMap[device.mac];
-                        const wantBg = pol?.type === 'blacklist' ? '#f87171' : '';
-                        if (polEl.style.background !== wantBg) {
-                            polEl.style.display = pol ? 'inline-block' : 'none';
-                            polEl.style.background = wantBg;
-                        }
-                    }
-                    const dot = tr.querySelector('[data-ht="dot"]');
-                    if (dot) { const cls = device.online ? 'ht-dot ht-dot-green' : 'ht-dot ht-dot-gray'; if (dot.className !== cls) dot.className = cls; }
-                });
+                deviceList.forEach((device, i) => { const tr = tbody.querySelector(`tr[data-mac="${esc(device.mac)}"]`); if (tr) _patchDeviceRow(tr, device, i); });
             }
-
             const updatedShort = state.lastUpdated ? state.lastUpdated.slice(11, 19) : '';
             const dateEl = el.querySelector('[data-ht="sum_date"]');
             if (dateEl) { const txt = updatedShort ? `（更新时间 ${updatedShort}）` : ''; if (dateEl.textContent !== txt) dateEl.textContent = txt; }
-
         } finally { dataLoading = false; }
     };
 
@@ -1153,6 +1124,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-rpt-row-flex:last-child{border-bottom:none;}
       #${MODAL} .ht-rpt-row-flex:hover{background:rgba(255,255,255,.03);}
       #${MODAL} .ht-rpt-row-flex.ht-rpt-on{background:linear-gradient(90deg,rgba(74,222,128,.13),rgba(74,222,128,.02));box-shadow:inset 3px 0 0 #4ade80;}
+      #${MODAL} .ht-summary-item.ht-rpt-on{background:rgba(74,222,128,.08);border-radius:8px;box-shadow:inset 0 -2px 0 #4ade80;}
       #${MODAL} .ht-rpt-row-idx{opacity:.4;font-size:.54rem;min-width:14px;text-align:center;}
       #${MODAL} .ht-rpt-row-info{flex:1;min-width:0;max-width:62%;}
       #${MODAL} .ht-rpt-row-name{font-weight:600;font-size:.62rem;display:flex;align-items:center;flex-wrap:wrap;gap:2px;}
@@ -1293,6 +1265,18 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         labelsEl.innerHTML = buildChartLabels(rs.report.dailyTotals, 100, chartEl.clientWidth || 0);
     };
 
+    const _renderRandDevs = (day, macHostnames) => {
+        const displayDevs = day.devices.slice(0, 20);
+        const overflowCount = day.devices.length - 20;
+        const overflowBytes = overflowCount > 0 ? day.devices.slice(20).reduce((s, d) => s + d.bytes, 0) : 0;
+        return displayDevs.map(d => `<div class="ht-rpt-row-flex ht-rpt-rand-row">
+                <button class="ht-edit-mini" data-rpt-edit="${esc(d.mac)}" data-rpt-edit-type="random">✎</button>
+                <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(d.hostname || macHostnames[d.mac.toUpperCase()] || '未知设备')}</div>
+                  <div class="ht-rpt-row-meta"><span class="ht-rpt-mac-tog" data-macfull="${esc(d.mac)}" data-macmasked="${esc(maskMac(d.mac))}" style="cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);">${esc(maskMac(d.mac))}</span></div></div>
+                <span class="ht-rpt-row-bytes">${esc(htFormatBytes(d.bytes))}<div class="ht-rpt-row-uldl"><span class="ht-up">↑${esc(htFormatBytes(d.tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(d.rx))}</span></div></span>
+              </div>`).join('') + (overflowCount > 0 ? `<div class="ht-rpt-row-flex ht-rpt-rand-row" style="opacity:.6;justify-content:center;font-size:.54rem;">其他 ${overflowCount} 台 · ${esc(htFormatBytes(overflowBytes))}</div>` : '');
+    };
+
     const renderReportArea = () => {
         const rs = state._reportState;
         if (!rs || !rs.report) {
@@ -1311,21 +1295,22 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             <button id="ht_rpt_back" class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:2px 8px;margin-left:auto;">返回</button>
           </div>
           <div class="ht-summary-grid">
-            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(s.sysTotal))}</div><div class="ht-summary-lbl">系统增量</div></div>
-            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(s.iptTotal))}</div><div class="ht-summary-lbl">热点合计</div></div>
-            <div class="ht-summary-item"><div class="ht-summary-val">${s.knownCount} / ${s.totalCount}</div><div class="ht-summary-lbl">已知设备</div></div>
-            <div class="ht-summary-item"><div class="ht-summary-val">${esc(htFormatBytes(s.days > 0 ? Math.round(s.devTotal / s.days) : 0))}</div><div class="ht-summary-lbl">日均流量</div></div>
+            <div class="ht-summary-item${rs.chartMode === DEFAULT_CHART_MODE ? ' ht-rpt-on' : ''}" data-chart-mode="${MODE_SYS}" style="cursor:pointer;"><div class="ht-summary-val">${esc(htFormatBytes(s.sysTotal))} <span style="font-size:.48rem;opacity:.7">日均:${esc(htFormatBytes(s.days > 0 ? Math.round(s.sysTotal / s.days) : 0))}</span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap;"><span class="ht-up">↑${esc(htFormatBytes(s.sysTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(s.sysRx))}</span></div><div class="ht-summary-lbl">系统增量</div></div>
+            <div class="ht-summary-item${rs.chartMode === MODE_IPT ? ' ht-rpt-on' : ''}" data-chart-mode="${MODE_IPT}" style="cursor:pointer;"><div class="ht-summary-val">${esc(htFormatBytes(s.iptTotal))} <span style="font-size:.48rem;opacity:.7">日均:${esc(htFormatBytes(s.days > 0 ? Math.round(s.iptTotal / s.days) : 0))}</span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap;">v4:<span class="ht-up">${esc(htFormatBytes(s.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(s.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">已知 ${s.knownCount} / 总 ${s.totalCount}</div><div class="ht-summary-lbl">接入设备</div></div>
+            <div class="ht-summary-item${rs.chartMode === MODE_DEV && !rs.chartDev ? ' ht-rpt-on' : ''}" data-chart-mode="${MODE_DEV}" style="cursor:pointer;"><div class="ht-summary-val">${esc(htFormatBytes(s.devTotal))} <span style="font-size:.48rem;opacity:.7">日均:${esc(htFormatBytes(s.days > 0 ? Math.round(s.devTotal / s.days) : 0))}</span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap;"><span class="ht-up">↑${esc(htFormatBytes(s.devTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(s.devRx))}</span></div><div class="ht-summary-lbl">设备合计</div></div>
           </div>
         </div>`;
 
+        const _chartMode = rs.chartDev ? MODE_DEV : (rs.chartMode || DEFAULT_CHART_MODE);
         const chartData = rpt.dailyTotals;
-        const maxDt = Math.max(...chartData.map(d => d.dt), 1);
+        const maxDt = Math.max(...chartData.map(d => d[_chartMode] || 0), 1);
         const svgW = 100;
         const svgH = 60;
         const points = chartData.map((d, i) => {
             const x = chartData.length > 1 ? (i / (chartData.length - 1)) * svgW : svgW / 2;
-            const y = svgH - (d.dt / maxDt) * (svgH - 8) - 4;
-            return { x, y, date: d.date, bytes: d.dt };
+            const y = svgH - ((d[_chartMode] || 0) / maxDt) * (svgH - 8) - 4;
+            return { x, y, date: d.date, bytes: d[_chartMode] || 0 };
         });
         const polyline = points.map(p => `${p.x},${p.y}`).join(' ');
         const areaPath = points.length > 1 ? `M${points[0].x},${svgH} ${points.map(p => `L${p.x},${p.y}`).join(' ')} L${points[points.length - 1].x},${svgH} Z` : '';
@@ -1337,7 +1322,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const labelsHtml = buildChartLabels(chartData, svgW);
         const chartHtml = `<div class="ht-card ht-rpt-section">
           <div class="ht-rpt-chart-hd">
-            <span class="ht-rpt-chart-title">每日流量趋势${chartDevName ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(chartDevName))})</span>` : '<span class="ht-rpt-chart-dev">(设备合计)</span>'}</span>
+            <span class="ht-rpt-chart-title">每日流量趋势${chartDevName ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(chartDevName))})</span>` : `<span class="ht-rpt-chart-dev">(${CHART_MODE_LABEL[_chartMode]})</span>`}</span>
             ${chartDevName ? `<button id="ht_rpt_chart_reset" class="ht-rpt-chart-reset">× 返回全部</button>` : ''}
           </div>
           <div class="ht-rpt-chart" id="ht_rpt_chart">
@@ -1398,18 +1383,11 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             const dayTotal = day.devices.reduce((s, d) => s + d.bytes, 0);
             const dayTx = day.devices.reduce((s, d) => s + (d.tx || 0), 0);
             const dayRx = day.devices.reduce((s, d) => s + (d.rx || 0), 0);
-            const displayDevs = day.devices.slice(0, 20);
-            const overflowCount = day.devices.length - 20;
-            const overflowBytes = overflowCount > 0 ? day.devices.slice(20).reduce((s, d) => s + d.bytes, 0) : 0;
             const dateLabel = day.date.slice(5).replace('-', '月') + '日';
-            randomListHtml += `<details class="ht-rpt-rand-day"${idx === 0 ? ' open' : ''}>
+            const isFirst = idx === 0;
+            randomListHtml += `<details class="ht-rpt-rand-day"${isFirst ? ' open' : ''}>
               <summary>${dateLabel} · ${day.devices.length}台 · ${esc(htFormatBytes(dayTotal))} <span style="font-size:.48rem;opacity:.7;font-weight:400;"><span class="ht-up">↑${esc(htFormatBytes(dayTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(dayRx))}</span></span></summary>
-              <div class="ht-rpt-rand-list">${displayDevs.map(d => `<div class="ht-rpt-row-flex ht-rpt-rand-row">
-                <button class="ht-edit-mini" data-rpt-edit="${esc(d.mac)}" data-rpt-edit-type="random">✎</button>
-                <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(d.hostname || rpt.macHostnames[d.mac.toUpperCase()] || '未知设备')}</div>
-                  <div class="ht-rpt-row-meta"><span class="ht-rpt-mac-tog" data-macfull="${esc(d.mac)}" data-macmasked="${esc(maskMac(d.mac))}" style="cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);">${esc(maskMac(d.mac))}</span></div></div>
-                <span class="ht-rpt-row-bytes">${esc(htFormatBytes(d.bytes))}<div class="ht-rpt-row-uldl"><span class="ht-up">↑${esc(htFormatBytes(d.tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(d.rx))}</span></div></span>
-              </div>`).join('')}${overflowCount > 0 ? `<div class="ht-rpt-row-flex ht-rpt-rand-row" style="opacity:.6;justify-content:center;font-size:.54rem;">其他 ${overflowCount} 台 · ${esc(htFormatBytes(overflowBytes))}</div>` : ''}</div>
+              <div class="ht-rpt-rand-list"${!isFirst ? ` data-lazy-idx="${idx}"` : ''}>${isFirst ? _renderRandDevs(day, rpt.macHostnames) : ''}</div>
             </details>`;
         });
 
@@ -1428,7 +1406,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const today = new Date().toISOString().slice(0, 10);
         const now = new Date();
         const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-        state._reportState = { startDate: start, endDate: today, raw: null, nameMap: null, report: null, chartDev: null, _activeTab: 'known' };
+        state._reportState = { startDate: start, endDate: today, raw: null, nameMap: null, report: null, chartDev: null, chartMode: DEFAULT_CHART_MODE, _activeTab: 'known' };
         const area = document.querySelector(`#${MODAL} #ht_data_area`);
         if (area) area.innerHTML = renderReportArea();
         initReportDelegate();
@@ -1443,7 +1421,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         if (!area) return;
         area.innerHTML = renderReportArea();
         try {
-            const [nameMap, dataResult] = await Promise.all([loadNameMap(), loadReportData(rs.startDate, rs.endDate)]);
+            const nameMap = rs.nameMap || await loadNameMap();
+            const dataResult = await loadReportData(rs.startDate, rs.endDate);
             const raw = JSON.parse(dataResult?.content || '{"days":[]}');
             if (!raw.days) raw.days = [];
             const today = new Date().toISOString().slice(0, 10);
@@ -1461,7 +1440,11 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                             rx: d.rxBytes || 0
                         })),
                         sd: dc.summary?.sysDeltaBytes || 0,
+                        sdTx: dc.summary?.sysDeltaTxBytes || 0,
+                        sdRx: dc.summary?.sysDeltaRxBytes || 0,
                         it: dc.summary?.iptTotalBytes || 0,
+                        itV4: dc.summary?.iptTotalV4Bytes || 0,
+                        itV6: dc.summary?.iptTotalV6Bytes || 0,
                         dt: dc.summary?.deviceTotalBytes || 0
                     });
                 }
@@ -1497,7 +1480,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
 
         let dailyData;
         if (!devKey) {
-            dailyData = rs.report.dailyTotals.map(d => d.dt);
+            const _m = rs.chartMode || DEFAULT_CHART_MODE;
+            dailyData = rs.report.dailyTotals.map(d => d[_m] || 0);
         } else {
             const named = rs.report.named.find(d => d.name === devKey);
             const stable = rs.report.stable.find(d => d.mac === devKey);
@@ -1544,18 +1528,18 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         }
 
         if (hdEl) {
-            const devLabel = devKey ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(devKey))})</span>` : '<span class="ht-rpt-chart-dev">(设备合计)</span>';
+            const devLabel = devKey ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(devKey))})</span>` : `<span class="ht-rpt-chart-dev">(${CHART_MODE_LABEL[rs.chartMode || DEFAULT_CHART_MODE]})</span>`;
             const resetBtn = devKey ? `<button id="ht_rpt_chart_reset" class="ht-rpt-chart-reset">× 返回全部</button>` : '';
             hdEl.innerHTML = `<span class="ht-rpt-chart-title">每日流量趋势${devLabel}</span>${resetBtn}`;
         }
 
-        document.querySelectorAll(`#${MODAL} .ht-rpt-row`).forEach(row => {
-            row.classList.toggle('ht-rpt-on', row.dataset.rptDev === devKey);
-        });
-
-        const listHint = document.querySelector(`#${MODAL} .ht-rpt-list-hint`);
-        if (listHint) listHint.style.display = devKey ? 'none' : '';
-
+        const _area = chartEl?.closest('#ht_data_area') || document.querySelector(`#${MODAL} #ht_data_area`);
+        if (_area) {
+            _area.querySelectorAll('.ht-rpt-row').forEach(row => { row.classList.toggle('ht-rpt-on', row.dataset.rptDev === devKey); });
+            const listHint = _area.querySelector('.ht-rpt-list-hint');
+            if (listHint) listHint.style.display = devKey ? 'none' : '';
+            _area.querySelectorAll('[data-chart-mode]').forEach(el => el.classList.toggle('ht-rpt-on', !devKey && el.dataset.chartMode === (rs.chartMode || DEFAULT_CHART_MODE)));
+        }
         refreshChartLabels();
     };
 
@@ -1668,8 +1652,22 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                 refreshDataArea();
                 return;
             }
+            const modeItem = e.target.closest('[data-chart-mode]');
+            if (modeItem) {
+                e.stopPropagation();
+                const rs = state._reportState;
+                if (!rs) return;
+                const newMode = modeItem.dataset.chartMode;
+                rs.chartMode = (rs.chartMode === newMode && !rs.chartDev) ? DEFAULT_CHART_MODE : newMode;
+                rs.chartDev = null;
+                updateReportChart(null);
+                area.querySelectorAll('.ht-rpt-row').forEach(row => row.classList.remove('ht-rpt-on'));
+                return;
+            }
             if (e.target.closest('#ht_rpt_chart_reset')) {
                 e.stopPropagation();
+                const rs = state._reportState;
+                if (rs) rs.chartMode = DEFAULT_CHART_MODE;
                 updateReportChart(null);
                 return;
             }
@@ -1690,7 +1688,10 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                 e.stopPropagation();
                 const devKey = row.dataset.rptDev;
                 const rs = state._reportState;
-                if (rs) updateReportChart(rs.chartDev === devKey ? null : devKey);
+                if (rs) {
+                    rs.chartMode = MODE_DEV;
+                    updateReportChart(rs.chartDev === devKey ? null : devKey);
+                }
                 return;
             }
             const editBtn = e.target.closest('[data-rpt-edit]');
@@ -1731,6 +1732,18 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                 return;
             }
         });
+
+        area.addEventListener('toggle', (e) => {
+            const details = e.target;
+            if (!details.classList.contains('ht-rpt-rand-day') || !details.open) return;
+            const lazyEl = details.querySelector('[data-lazy-idx]');
+            if (!lazyEl) return;
+            const idx = parseInt(lazyEl.dataset.lazyIdx);
+            const rs = state._reportState;
+            if (!rs || !rs.report || !rs.report.random[idx]) return;
+            lazyEl.innerHTML = _renderRandDevs(rs.report.random[idx], rs.report.macHostnames);
+            delete lazyEl.dataset.lazyIdx;
+        }, true);
 
         area.addEventListener('change', (e) => {
             if (e.target.id === 'ht_rpt_start' || e.target.id === 'ht_rpt_end') {
@@ -1787,11 +1800,11 @@ ${summaryHtmls(m).map((html, i) => `<div class="ht-summary-item" data-ht="si_${i
         <div class="ht-card">
           <div class="ht-row" style="justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;">
             <div class="ht-row"><b>流量概览</b><span class="ht-date">${esc(dataDate)}<span data-ht="sum_date">${installed && updatedShort ? `（更新时间 ${esc(updatedShort)}）` : ''}</span></span></div>
-            <div class="ht-row" style="gap:4px;"><button id="ht_report_btn" data-newkey="report" class="ht-btn ht-btn-ghost${newCls('report')}" style="font-size:.56rem;padding:2px 8px;">用量报告</button><button id="ht_devices_toggle" data-newkey="devices" class="ht-btn ht-btn-ghost${newCls('devices')}" style="font-size:.56rem;padding:2px 8px;">${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? '设备明细 ▼' : '设备明细 ▲'}</button></div>
+            <div class="ht-row" style="gap:4px;"><button id="ht_report_btn" data-newkey="report" class="ht-btn ht-btn-ghost${newCls('report')}" style="font-size:.56rem;padding:2px 8px;">用量报告</button><button id="ht_devices_toggle" data-newkey="devices" class="ht-btn ht-btn-ghost${newCls('devices')}" style="font-size:.56rem;padding:2px 8px;">${localStorage.getItem(LS_DEVICES_COLLAPSED) === '1' ? '设备明细 ▼' : '设备明细 ▲'}</button></div>
           </div>
           ${summaryHtml}
         </div>
-        <div class="ht-card" id="ht_devices_card" style="${localStorage.getItem('hotspot_traffic_devices_collapsed') === '1' ? 'display:none' : ''}">
+        <div class="ht-card" id="ht_devices_card" style="${localStorage.getItem(LS_DEVICES_COLLAPSED) === '1' ? 'display:none' : ''}">
           ${devicesHtml}
         </div>`;
     };
@@ -2016,7 +2029,7 @@ echo __RESULT__
                 const isCollapsed = card.style.display === 'none';
                 card.style.display = isCollapsed ? '' : 'none';
                 toggleBtn.textContent = isCollapsed ? '设备明细 ▲' : '设备明细 ▼';
-                localStorage.setItem('hotspot_traffic_devices_collapsed', isCollapsed ? '0' : '1');
+                localStorage.setItem(LS_DEVICES_COLLAPSED, isCollapsed ? '0' : '1');
                 return;
             }
             const macSpan = e.target.closest('[data-full-mac]');

@@ -850,8 +850,8 @@ rm -rf ${sq(DATA_DIR)}
         if (total > 0) {
             const rx = device.totalRx || 0;
             const tx = device.totalTx || 0;
-            if (rx / total > 0.85) tags.push({ text: '下载为主', cls: 'ht-rpt-tag-type' });
-            else if (tx / total > 0.6) tags.push({ text: '上传为主', cls: 'ht-rpt-tag-type' });
+            if (rx / total > 0.85) tags.push({ text: '下载为主', cls: 'ht-rpt-tag-down' });
+            else if (tx / total > 0.6) tags.push({ text: '上传为主', cls: 'ht-rpt-tag-up' });
         }
         return tags;
     };
@@ -1111,7 +1111,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       #${MODAL} .ht-rpt-tag{font-size:.42rem;padding:1px 5px;border-radius:3px;white-space:nowrap;margin-left:4px;display:inline-block;}
       #${MODAL} .ht-rpt-tag-freq{background:rgba(99,102,241,.2);color:#a5b4fc;}
       #${MODAL} .ht-rpt-tag-rare{background:rgba(156,163,175,.15);color:#9ca3af;}
-      #${MODAL} .ht-rpt-tag-type{background:rgba(34,197,94,.15);color:#86efac;}
+      #${MODAL} .ht-rpt-tag-up{background:rgba(103,232,249,.15);color:#67e8f9;}
+      #${MODAL} .ht-rpt-tag-down{background:rgba(34,197,94,.15);color:#86efac;}
       #${MODAL} .ht-rpt-tag-heavy{background:rgba(251,191,36,.15);color:#fde047;}
       #${MODAL} .ht-rpt-rand-day{margin-bottom:2px;}
       #${MODAL} .ht-rpt-rand-day summary{font-size:.58rem;opacity:.85;cursor:pointer;padding:4px 0;list-style:none;}

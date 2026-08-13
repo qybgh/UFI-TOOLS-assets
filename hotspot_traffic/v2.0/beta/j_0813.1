@@ -361,6 +361,12 @@
     const saveNameMap = async (nameMap) => {
         const lines = Object.entries(nameMap).filter(([, v]) => v).map(([mac, name]) => mac + '|' + name).join('\n');
         await run(`printf '%s\\n' ${sq(lines)} > ${sq(CUSTOM_NAMES_FILE)}`);
+        const devs = state.dataCache?.devices;
+        if (devs) Object.keys(devs).forEach(m => {
+            const u = m.toUpperCase();
+            const newVal = nameMap[u] || '';
+            localStorage.setItem(_pnKey(u), newVal);
+        });
     };
 
     const maskMac = (mac) => {
@@ -1564,7 +1570,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             const { el, close } = createFixedToast('ht_rpt_edit', `<div style="pointer-events:all;width:88vw;max-width:340px">
               <div class="title" style="margin:0 0 8px">修改设备名称</div>
               <div style="margin-bottom:8px"><input id="ht_rpt_edit_name" type="text" value="${esc(editKey)}" style="width:100%;padding:6px 10px;background:#1e2030;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:.68rem;outline:none"></div>
-              <div style="font-size:.54rem;opacity:.5;margin-bottom:4px;">名称相同的设备已合并统计，关联的MAC地址 (${macList.length}个):</div>
+              <div style="font-size:.54rem;opacity:.5;margin-bottom:4px;">自定义名称相同的设备已合并统计，关联的MAC地址 (${macList.length}个):</div>
               <div id="ht_rpt_edit_macs">${macList.map(mac => { const _hn = rs.report.macHostnames[mac.toUpperCase()] || ''; return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;font-size:.6rem;gap:8px;border-bottom:1px solid rgba(255,255,255,.06);"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_hn ? esc(_hn) + ' · ' : ''}<span class="ht-rpt-mac-tog" data-macfull="${esc(mac)}" data-macmasked="${esc(maskMac(mac))}" style="opacity:.55;cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);" title="点击查看/隐藏完整MAC">${esc(maskMac(mac))}</span></span><button class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:3px 10px;flex-shrink:0;" data-rpt-remove-mac="${esc(mac)}">移除</button></div>`; }).join('')}</div>
               <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px"><button id="ht_rpt_edit_ok" class="ht-btn" style="font-size:.6rem;padding:4px 12px;">确认</button><button id="ht_rpt_edit_cancel" class="ht-btn ht-btn-ghost" style="font-size:.6rem;padding:4px 12px;">取消</button></div>
             </div>`);
@@ -1616,7 +1622,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
               <div style="font-size:.56rem;opacity:.5;margin-bottom:4px;">MAC: <span class="ht-rpt-mac-tog" data-macfull="${esc(mac)}" data-macmasked="${esc(maskMac(mac))}" style="cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);" title="点击查看/隐藏完整MAC">${esc(maskMac(mac))}</span></div>
               ${hostname ? `<div style="font-size:.56rem;opacity:.5;margin-bottom:6px;">设备名: ${esc(hostname)} (自动识别)</div>` : ''}
               <div style="margin-bottom:6px"><input id="ht_rpt_edit_name" type="text" placeholder="输入自定义名称" style="width:100%;padding:6px 10px;background:#1e2030;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:.68rem;outline:none"></div>
-              <div style="font-size:.5rem;opacity:.4;line-height:1.4;margin-bottom:8px;">设置名称后，此设备将归入"已命名"组。若输入已有名称，将与同名设备合并。</div>
+              <div style="font-size:.5rem;opacity:.4;line-height:1.4;margin-bottom:8px;">设置名称后，此设备将归入“已知设备”。若输入已有名称，将与同名设备合并。</div>
               <div style="display:flex;gap:6px;justify-content:flex-end;"><button id="ht_rpt_edit_ok" class="ht-btn" style="font-size:.6rem;padding:4px 12px;">确认</button><button id="ht_rpt_edit_cancel" class="ht-btn ht-btn-ghost" style="font-size:.6rem;padding:4px 12px;">取消</button></div>
             </div>`);
             el.querySelector('#ht_rpt_edit_cancel').onclick = () => close();

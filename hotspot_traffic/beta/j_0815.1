@@ -1,6 +1,6 @@
 //<script>
 (async () => {
-    const REQUIRED_APIS = ['runShellWithRoot', 'createToast', 'createFixedToast', 'saveConfig', 'checkAdvancedFunc', 'collapseGen', 'createModal', 'showModal', 'getUFIData', 'getCustomHead', 'setCustomHead'];
+    const REQUIRED_APIS = ['runShellWithRoot', 'createToast', 'createFixedToast', 'saveConfig', 'checkAdvancedFunc', 'collapseGen', 'createModal', 'showModal', 'getUFIData', 'getCustomHead', 'setCustomHead', 'formatLocalDate'];
     const missingApis = REQUIRED_APIS.filter((n) => {
         try { return typeof eval(n) !== 'function'; } catch { return true; }
     });
@@ -338,11 +338,6 @@
     const renderTrafficRateCell = (device, total, tx, rx) => `<span>${esc(htFormatBytes(total))} <span style="font-size:.48rem;opacity:.7;white-space:nowrap">↑${esc(htFormatBytes(tx))} ↓${esc(htFormatBytes(rx))}</span></span> <span class="ht-rate-seg" style="font-size:.48rem;opacity:.85;white-space:nowrap"><span class="ht-up">↑${esc(htFormatRate(device.txRateBps))}</span> <span class="ht-down">↓${esc(htFormatRate(device.rxRateBps))}</span></span>`;
 
     const isRandomMac = (mac) => (parseInt(mac.split(':')[0], 16) & 0x02) !== 0;
-
-    const htLocalDate = (d) => {
-        const t = d || new Date();
-        return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
-    };
 
     const dateRange = (start, end) => {
         const arr = [];
@@ -1409,7 +1404,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
     const showUsageReport = async () => {
         setAutoData(false);
         state._viewMode = 'report';
-        const today = htLocalDate();
+        const today = formatLocalDate(new Date());
         const start = `${today.slice(0, 7)}-01`;
         state._reportState = { startDate: start, endDate: today, raw: null, nameMap: null, report: null, chartDev: null, chartMode: DEFAULT_CHART_MODE, _activeTab: 'known' };
         const area = document.querySelector(`#${MODAL} #ht_data_area`);
@@ -1434,7 +1429,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             }
             const raw = JSON.parse(rawContent || '{"days":[]}');
             if (!raw.days) raw.days = [];
-            const today = htLocalDate();
+            const today = formatLocalDate(new Date());
             if (rs.startDate <= today && today <= rs.endDate) {
                 if (!state.dataCache) { try { await loadData(); } catch (e) {} }
                 const dc = state.dataCache;
@@ -1766,8 +1761,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                     const endInput = area.querySelector('#ht_rpt_end');
                     let startDate = startInput?.value || rs.startDate;
                     let endDate = endInput?.value || rs.endDate;
-                    const today = htLocalDate();
-                    const minDate = htLocalDate(new Date(Date.now() - 60 * 86400000));
+                    const today = formatLocalDate(new Date());
+                    const minDate = formatLocalDate(new Date(Date.now() - 60 * 86400000));
                     if (startDate < minDate) { startDate = minDate; if (startInput) startInput.value = minDate; createToast('最远可回溯60天', '', 2000); }
                     if (endDate <= startDate) { endDate = today; if (endInput) endInput.value = today; createToast('截止日须大于起始日', '', 2000); }
                     rs.startDate = startDate;
@@ -1785,7 +1780,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const devicesMap = (state.dataCache && state.dataCache.devices) ? state.dataCache.devices : {};
         const deviceList = sortDevices(devicesMap);
         const summary = state.summary;
-        const dataDate = (state.dataCache && state.dataCache.date) || htLocalDate();
+        const dataDate = (state.dataCache && state.dataCache.date) || formatLocalDate(new Date());
 
         let summaryHtml;
         if (summary) {

@@ -1,1 +1,2327 @@
-1
+//<script>
+(async () => {
+    const REQUIRED_APIS = ['runShellWithRoot', 'createToast', 'createFixedToast', 'saveConfig', 'checkAdvancedFunc', 'collapseGen', 'createModal', 'showModal', 'getUFIData', 'getCustomHead', 'setCustomHead'];
+    const missingApis = REQUIRED_APIS.filter((n) => {
+        try { return typeof eval(n) !== 'function'; } catch { return true; }
+    });
+    if (missingApis.length) {
+        const tip = 'UFI-TOOLS 版本过低，缺少 API: ' + missingApis.join(', ') + '，请升级到最新版本后再使用本插件';
+        try { typeof createToast === 'function' ? createToast(tip, 'red', 6000) : alert(tip); } catch { try { alert(tip); } catch { } }
+        return;
+    }
+
+    // ─── constants ────────────────────────────────────────────────────────────
+    const _PREV_VER = '';
+    const NAME = 'hotspot_traffic';
+    const MODAL = 'hotspot_traffic_panel';
+    const STYLE = 'hotspot_traffic_style';
+    const LS_KEY = 'hotspot_traffic_';
+    const NEWDOT_KEY = LS_KEY + 'seen_';
+    const wasSeen = (key) => localStorage.getItem(NEWDOT_KEY + key) === '1';
+    const markSeen = (key) => {
+        localStorage.setItem(NEWDOT_KEY + key, '1');
+        document.querySelectorAll(`#${MODAL} [data-newkey="${key}"]`).forEach(el => el.classList.remove('ht-newdot'));
+    };
+    const newCls = (key) => wasSeen(key) ? '' : ' ht-newdot';
+    const DATA_DIR = '/data/hotspot_traffic';
+    const DATA_FILE = `${DATA_DIR}/data.json`;
+    const DIAG_RESULT_FILE = `${DATA_DIR}/diag_result.json`;
+    const LAST_REPORT_TS_FILE = `${DATA_DIR}/_last_report_ts`;
+    const JQ = '/data/data/com.minikano.f50_sms/files/jq';
+    const POLICY_FILE = DATA_DIR + '/device_policy.json';
+    const POLICY_TRIGGER = DATA_DIR + '/.policy_trigger';
+    const DIAG_LOCK_FILE = `${DATA_DIR}/diag.lock`;
+    const LOG_FILE = '/sdcard/hotspot_traffic_log.log';
+    const DIAG_BIN_FILE = '/sdcard/hotspot_diag';
+    const TRAFFIC_PROC = '/data/local/tmp/hotspot_traffic';
+    const DIAG_PROC = '/data/local/tmp/hotspot_diag';
+    const PID_FILE = `${DATA_DIR}/.pid`;
+    const BOOT_SH_FILE = '/sdcard/ufi_tools_boot.sh';
+    const BOOT_LINE = `cp /sdcard/hotspot_traffic ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`;
+    const WEBHOOK_FILE = `${DATA_DIR}/.webhook`;
+    const CUSTOM_NAMES_FILE = `${DATA_DIR}/custom_names.txt`;
+    const MODE_SYS = 'sd';
+    const MODE_IPT = 'it';
+    const MODE_DEV = 'dt';
+    const DEFAULT_CHART_MODE = MODE_SYS;
+    const CHART_MODE_LABEL = { [MODE_SYS]: '系统增量', [MODE_IPT]: '热点合计', [MODE_DEV]: '设备合计' };
+    const LS_DEVICES_COLLAPSED = LS_KEY + 'devices_collapsed';
+    const QQ_GROUP = '1019849819';
+    const DIAG_COOLDOWN = 1000 * 60 * 5;
+    const REPORT_COOLDOWN = 1000 * 60 * 15;
+    const CDN_ORIGIN = 'cdn.jsdelivr.net';
+    const CDN_MIRRORS = ['cdn.jsdmirror.com','jsd.onmicrosoft.cn'];
+    const GH_VERSION_BASE = `https://${CDN_ORIGIN}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/`;
+    const CDN_RETRY_PER_NODE = 3;
+    const CDN_RETRY_DELAY = 800;
+    let _probedBestNode = null;
+    const TRAFFIC_BIN_FILE = '/sdcard/hotspot_traffic';
+    const PENDING_JS_FILE = '/data/local/tmp/_ht_pending.js';
+
+    const cdnUrlForNode = (url, node) => url ? url.replace(CDN_ORIGIN, node) : url;
+    const cdnPurge = (ver) => { if (ver) run(`curl -sL --connect-timeout 5 --max-time 10 ${sq((GH_VERSION_BASE + 'v' + ver + '.json').replace(CDN_ORIGIN, 'purge.jsdelivr.net'))}`, 12000).catch(() => {}); };
+
+    const _M = [0x4b,0x41,0x4e,0x4f,0x5f,0x50,0x4c,0x55,0x47,0x49,0x4e].map(c=>String.fromCharCode(c)).join('');
+    const _PS = `<!-- [${_M}_START]`;
+    const _PE = `<!-- [${_M}_END]`;
+    const _SIG = '@@HT_PLUGIN_ID:7f3a9c@@';
+    let _dataEvtBound = false;
+
+    // ─── utils ────────────────────────────────────────────────────────────────
+    const sq = (v) => `'${String(v ?? '').replace(/'/g, `'\''`)}'`;
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    const esc = (v) => String(v ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    const parseTs = (ts) => ts ? new Date(String(ts).replace(' ', 'T')).getTime() : NaN;
+    const run = async (cmd, timeout = 30000) => {
+        try {
+            const r = await runShellWithRoot(cmd, timeout);
+            return r || { success: false, content: '' };
+        } catch (e) {
+            console.warn('[HT] run error:', e?.message || e);
+            return { success: false, content: '', error: e?.message || String(e) };
+        }
+    };
+
+    const CURL_ERR_MAP = { 6:'网络域名解析失败', 7:'无法连接到服务器', 22:'服务器返回错误', 28:'网络连接超时', 35:'网络安全连接失败', 56:'网络连接中断（网络不稳定，可稍后重试）', 92:'HTTP/2帧错误（网络异常）' };
+    const curlErrText = (c) => CURL_ERR_MAP[parseInt(c)] || ('网络传输异常(码' + c + ')');
+    const CURL_WK = '--connect-timeout 8 --max-time 60 --speed-limit 1 --speed-time 45';
+    const CURL_RESUME_ECS = new Set(['18','28','56','92']);
+    const htErr = (userMsg, detail) => { const e = new Error(userMsg); e.htDetail = String(detail ?? ''); return e; };
+    const cdnRetry = async (fn) => {
+        const bestNode = await probeBestCdn();
+        const candidates = [bestNode, ...CDN_MIRRORS.filter(m => m !== bestNode), CDN_ORIGIN].filter((v, i, a) => a.indexOf(v) === i);
+        let lastErr = null;
+        for (let n = 0; n < candidates.length; n++) {
+            const node = candidates[n];
+            const retries = n === 0 ? CDN_RETRY_PER_NODE : 2;
+            for (let r = 0; r < retries; r++) {
+                try { return await fn(node, r, r === 0); }
+                catch (e) {
+                    lastErr = e;
+                    if (r < retries - 1) await wait(CDN_RETRY_DELAY * Math.pow(2, r));
+                }
+            }
+        }
+        if (lastErr && typeof lastErr === 'object') lastErr.htAttempts = candidates.reduce((s, _, i) => s + (i === 0 ? CDN_RETRY_PER_NODE : 2), 0);
+        throw lastErr;
+    };
+
+    const policySet = async (mac, type) => {
+        await run(`[ -s ${sq(POLICY_FILE)} ] || printf '{}' > ${sq(POLICY_FILE)}`);
+        const r = await run(`timeout 2s ${sq(JQ)} -c --arg m ${sq(mac)} --arg t ${sq(type)} '.[$m]={"type":$t}' ${sq(POLICY_FILE)} > ${sq(POLICY_FILE)}.tmp && mv ${sq(POLICY_FILE)}.tmp ${sq(POLICY_FILE)} && printf 1 > ${sq(POLICY_TRIGGER)} && echo __OK__ || { rm -f ${sq(POLICY_FILE)}.tmp; echo __FAIL__; }`);
+        return { success: (r?.content || '').includes('__OK__'), content: r?.content };
+    };
+
+    const policyRemove = async (mac) => {
+        await run(`[ -s ${sq(POLICY_FILE)} ] || printf '{}' > ${sq(POLICY_FILE)}`);
+        const r = await run(`timeout 2s ${sq(JQ)} -c --arg m ${sq(mac)} 'del(.[$m])' ${sq(POLICY_FILE)} > ${sq(POLICY_FILE)}.tmp && mv ${sq(POLICY_FILE)}.tmp ${sq(POLICY_FILE)} && printf 1 > ${sq(POLICY_TRIGGER)} && echo __OK__ || { rm -f ${sq(POLICY_FILE)}.tmp; echo __FAIL__; }`);
+        return { success: (r?.content || '').includes('__OK__'), content: r?.content };
+    };
+
+    const loadPolicyMap = async () => {
+        const r = await run(`timeout 1s ${sq(JQ)} -r 'to_entries[] | "\\(.key)|\\(.value.type // "normal")"' ${sq(POLICY_FILE)} 2>/dev/null || echo ''`, 3000);
+        const map = {};
+        String(r?.content || '').trim().split('\n').forEach(line => {
+            if (!line) return;
+            const [mac, type] = line.split('|');
+            if (mac && type && type !== 'normal') map[mac] = { type };
+        });
+        state.policyMap = map;
+    };
+
+    // ─── state ────────────────────────────────────────────────────────────────
+    const state = {
+        installed: false,
+        dataCache: null,
+        lastUpdated: '',
+        summary: null,
+        autoData: false,
+        autoDataTimer: null,
+        diagStatus: 'idle',
+        diagResult: null,
+        _installing: false,
+        _uninstalling: false,
+        _deviceVersion: '',
+        _clientIp: '',
+        policyMap: {},
+        _lastMtimeKey: '',
+        _viewMode: 'today',
+        _reportState: null,
+    };
+
+    let _manifest = null;
+    let _lastManifestErr = '';
+    const probeBestCdn = async () => {
+        if (_probedBestNode) return _probedBestNode;
+        const candidates = [CDN_ORIGIN, ...CDN_MIRRORS];
+        const results = [];
+        for (const node of candidates) {
+            const testUrl = `https://${node}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/_latest.json?_=${Date.now()}`;
+            const start = Date.now();
+            const r = await run(
+                `curl -sL --connect-timeout 3 --max-time 5 -w '%{http_code}' -o /dev/null ${sq(testUrl)}`, 8000
+            ).catch(() => ({ content: '0' }));
+            const elapsed = Date.now() - start;
+            if (String(r?.content || '').trim() === '200') results.push({ node, rtt: elapsed });
+        }
+        _probedBestNode = results.length > 0
+            ? results.sort((a, b) => a.rtt - b.rtt)[0].node
+            : CDN_MIRRORS[0];
+        return _probedBestNode;
+    };
+
+    const fetchManifestWithProbe = async (jsonFileName, node, retries) => {
+        const bestNode = node || await probeBestCdn();
+        const url = GH_VERSION_BASE.replace(CDN_ORIGIN, bestNode) + jsonFileName + '?_=' + Date.now();
+        const tmp = '/data/local/tmp/_ht_manifest.tmp';
+        const maxR = retries || 3;
+        const codes = [];
+        await run(`rm -f ${sq(tmp)}`, 1000);
+        for (let retry = 0; retry < maxR; retry++) {
+            const resumeFlag = retry > 0 ? '-C - ' : '';
+            const dlR = await run(
+                `curl -sL --fail ${resumeFlag}${CURL_WK} ${sq(url)} -o ${sq(tmp)}; ec=$?; [ "$ec" -eq 0 ] && echo __OK__ || echo "__FAIL__:$ec"`, 45000);
+            const out = String(dlR?.content || '');
+            if (out.includes('__OK__')) {
+                const rd = await run(`awk '{print}' ${sq(tmp)}`, 3000);
+                const text = String(rd?.content || '').trim();
+                await run(`rm -f ${sq(tmp)}`, 1000);
+                if (text && text[0] === '{') {
+                    try {
+                        const j = JSON.parse(text);
+                        if (j.rev && j.guard && j.diag && j.deploy && j.js) return j;
+                        codes.push('bad_fields');
+                    } catch { codes.push('json_err'); }
+                } else { codes.push('not_json'); }
+            } else {
+                const m = out.match(/__FAIL__:(\d+)/);
+                codes.push(m?.[1] || '?');
+                if (!CURL_RESUME_ECS.has(m?.[1])) await run(`rm -f ${sq(tmp)}`, 1000);
+            }
+            if (retry < maxR - 1) await wait(CDN_RETRY_DELAY * Math.pow(2, retry));
+        }
+        await run(`rm -f ${sq(tmp)}`, 1000);
+        _lastManifestErr = bestNode + ':' + jsonFileName + '=[' + codes.join(',') + ']';
+        return null;
+    };
+
+    const fetchManifestAllNodes = async (jsonFile) => {
+        const errs = [];
+        let raw = await fetchManifestWithProbe(jsonFile);
+        if (raw) return raw;
+        errs.push(_lastManifestErr);
+        const nodes = [CDN_ORIGIN, ...CDN_MIRRORS].filter(n => n !== _probedBestNode);
+        for (const n of nodes) {
+            raw = await fetchManifestWithProbe(jsonFile, n, 2);
+            if (raw) return raw;
+            errs.push(_lastManifestErr);
+        }
+        _lastManifestErr = errs.join(' | ');
+        return null;
+    };
+
+    const parseManifest = (j) => {
+        if (!j || !j.rev || !j.guard || !j.diag || !j.deploy || !j.js) return null;
+        return {
+            version: j.rev,
+            guardUrl: j.guard,
+            diagUrl: j.diag,
+            deployUrl: j.deploy,
+            jsUrl: j.js,
+            md5: j.md5 || '',
+            notes: j.notes || '',
+        };
+    };
+
+    const downloadDeployScript = async (url, progress) => {
+        const bin = '/data/local/tmp/ht_deploy';
+        const b64 = bin + '.b64';
+        await cdnRetry(async (node, retryIdx, isNewNode) => {
+            if (retryIdx > 0 || node !== _probedBestNode) progress('dl_deploy', 'running', '重试');
+            const _url = cdnUrlForNode(url, node);
+            if (isNewNode) await run(`rm -f ${sq(b64)}`, 2000);
+            const resumeFlag = !isNewNode ? '-C - ' : '';
+            const dlR = await run(
+                `curl -sL --fail ${resumeFlag}${CURL_WK} ${sq(_url)} -o ${sq(b64)}; ec=$?; [ "$ec" -eq 0 ] && echo __DL_OK__ || echo "__DL_FAIL__:$ec"`, 75000);
+            if (!String(dlR?.content || '').includes('__DL_OK__')) {
+                const m = String(dlR?.content || '').match(/__DL_FAIL__:(\d+)/);
+                if (!CURL_RESUME_ECS.has(m?.[1])) await run(`rm -f ${sq(b64)}`, 2000);
+                throw htErr('部署脚本下载失败', curlErrText(m?.[1] || '?'));
+            }
+            const chk = await run(`_i=$(tr -d 'A-Za-z0-9+/=\\n\\r' < ${sq(b64)} | wc -c); _s=$(wc -c < ${sq(b64)}); echo "$_i|$_s"`, 5000);
+            const [inv, sz] = String(chk?.content || '').trim().split('|');
+            if (parseInt(inv || '1') > 0 || parseInt(sz || '0') < 200) {
+                await run(`rm -f ${sq(b64)}`, 2000);
+                throw htErr('部署脚本格式异常');
+            }
+            const dec = await run(`base64 -d ${sq(b64)} > ${sq(bin)} && rm -f ${sq(b64)} && echo __OK__`, 10000);
+            if (!String(dec?.content || '').includes('__OK__')) throw htErr('部署脚本解码失败');
+        });
+        await run(`chmod 755 ${sq(bin)}`);
+        return bin;
+    };
+
+    const applyPluginJs = async (prevVer) => {
+        const chk = await run(`[ -s ${sq(PENDING_JS_FILE)} ] && echo EXISTS || echo NONE`, 2000);
+        const hasNewJs = String(chk?.content || '').includes('EXISTS');
+        if (!hasNewJs && !prevVer) return;
+        let newJs;
+        if (hasNewJs) {
+            const r = await run(`base64 ${sq(PENDING_JS_FILE)} | tr -d '\n'`, 15000);
+            const b64 = String(r?.content || '').trim();
+            if (!b64 || b64.length < 200) { await run(`rm -f ${sq(PENDING_JS_FILE)}`); throw htErr('界面组件文件异常', '环节: b64过短 | 长度: ' + (b64 ? b64.length : 0)); }
+            try { newJs = new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0))); } catch (e) { await run(`rm -f ${sq(PENDING_JS_FILE)}`); throw htErr('界面组件文件异常', '环节: 解码失败 | ' + (e?.message || e)); }
+            if (!newJs || newJs.length < 200) { await run(`rm -f ${sq(PENDING_JS_FILE)}`); throw htErr('界面组件文件异常', '环节: 内容过短 | 长度: ' + (newJs ? newJs.length : 0)); }
+        }
+        const currentText = await getCustomHead();
+        if (!currentText) { if (hasNewJs) throw new Error('读取插件列表失败'); return; }
+        const _esc = s => s.replace(/[\[\]]/g, '\\$&');
+        const pluginRegex = new RegExp(_esc(_PS) + '\\s*(.*?)\\s*-->([\\s\\S]*?)' + _esc(_PE) + '\\s*\\1\\s*-->', 'g');
+        let found = false, newText = currentText, match;
+        while ((match = pluginRegex.exec(currentText)) !== null) {
+            if (match[2].includes(_SIG)) {
+                let content = hasNewJs ? newJs : match[2];
+                if (prevVer) content = content.replace(/const _PREV_VER = '[^']*'/, `const _PREV_VER = '${prevVer}'`);
+                if (!hasNewJs && content === match[2]) return;
+                const pluginName = match[1].trim();
+                const newBlock = `${_PS} ${pluginName} -->\n${content}\n${_PE} ${pluginName} -->`;
+                newText = currentText.replace(match[0], () => newBlock);
+                found = true;
+                break;
+            }
+        }
+        if (!found) { if (hasNewJs) throw new Error('未找到当前插件，请加群 ' + QQ_GROUP + ' 联系作者'); return; }
+        const saveResult = await (async () => {
+            let lastErr = null;
+            for (let i = 0; i <= 2; i++) {
+                try {
+                    const r = await setCustomHead(newText);
+                    if (!r || r.result !== 'success') throw htErr('界面组件保存失败', '返回: ' + JSON.stringify(r).slice(0, 200) + ' | 文本长度: ' + newText.length);
+                    return r;
+                } catch (e) { lastErr = e; if (i < 2) await wait(1000 * Math.pow(2, i)); }
+            }
+            lastErr.htAttempts = 3;
+            throw lastErr;
+        })();
+        if (hasNewJs && (!saveResult || saveResult.result !== 'success')) throw new Error('保存失败');
+        if (hasNewJs) await run(`rm -f ${sq(PENDING_JS_FILE)}`);
+    };
+
+    // ─── helpers ──────────────────────────────────────────────────────────────
+    const _pnKey = (mac) => LS_KEY + 'pn_' + mac.toUpperCase();
+    const setCustomName = (mac, name) => {
+        const uMac = mac.toUpperCase();
+        localStorage.setItem(_pnKey(uMac), name.trim());
+        if (name.trim()) {
+            run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; printf '%s\\n' ${sq(uMac + '|' + name.trim())} >> "$_f.tmp"; mv "$_f.tmp" "$_f"`);
+        } else {
+            run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; mv "$_f.tmp" "$_f"`);
+        }
+    };
+    const htFormatBytes = (bytes) => {
+        const num = parseInt(bytes) || 0;
+        const sign = num < 0 ? '-' : '';
+        const abs = Math.abs(num);
+        if (abs >= 1099511627776) return sign + (abs / 1099511627776).toFixed(2) + ' TB';
+        if (abs >= 1073741824) return sign + (abs / 1073741824).toFixed(2) + ' GB';
+        if (abs >= 1048576) return sign + (abs / 1048576).toFixed(1) + ' MB';
+        if (abs >= 1024) return sign + (abs / 1024).toFixed(0) + ' KB';
+        return sign + abs + ' B';
+    };
+
+    const htFormatRate = (bps) => htFormatBytes(bps) + '/s';
+    const renderTrafficRateCell = (device, total, tx, rx) => `<span>${esc(htFormatBytes(total))} <span style="font-size:.48rem;opacity:.7;white-space:nowrap">↑${esc(htFormatBytes(tx))} ↓${esc(htFormatBytes(rx))}</span></span> <span class="ht-rate-seg" style="font-size:.48rem;opacity:.85;white-space:nowrap"><span class="ht-up">↑${esc(htFormatRate(device.txRateBps))}</span> <span class="ht-down">↓${esc(htFormatRate(device.rxRateBps))}</span></span>`;
+
+    const isRandomMac = (mac) => (parseInt(mac.split(':')[0], 16) & 0x02) !== 0;
+
+    const dateRange = (start, end) => {
+        const arr = [];
+        let cur = start;
+        let guard = 0;
+        while (cur <= end && guard < 400) {
+            arr.push(cur);
+            const dt = new Date(cur + 'T12:00:00');
+            dt.setDate(dt.getDate() + 1);
+            cur = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+            guard++;
+        }
+        return arr;
+    };
+
+    const loadNameMap = async () => {
+        const r = await run(`awk '{print}' ${sq(CUSTOM_NAMES_FILE)} 2>/dev/null || true`);
+        const map = {};
+        for (const line of (r?.content || '').split('\n')) {
+            const idx = line.indexOf('|');
+            if (idx > 0) map[line.slice(0, idx).toUpperCase()] = line.slice(idx + 1).trim();
+        }
+        return map;
+    };
+
+    const saveNameMap = async (nameMap) => {
+        const lines = Object.entries(nameMap).filter(([, v]) => v).map(([mac, name]) => mac + '|' + name).join('\n');
+        await run(`printf '%s\\n' ${sq(lines)} > ${sq(CUSTOM_NAMES_FILE)}`);
+        const devs = state.dataCache?.devices;
+        if (devs) Object.keys(devs).forEach(m => {
+            const u = m.toUpperCase();
+            const newVal = nameMap[u] || '';
+            localStorage.setItem(_pnKey(u), newVal);
+        });
+    };
+
+    const maskMac = (mac) => {
+        if (!mac || typeof mac !== 'string') return mac || '';
+        const parts = mac.split(':');
+        if (parts.length !== 6) return mac;
+        return `${parts[0]}:${parts[1]}:**:**:**:${parts[5]}`;
+    };
+    const toggleMacMask = (el) => { el.textContent = el.textContent === el.dataset.macfull ? el.dataset.macmasked : el.dataset.macfull; };
+
+    const sortDevices = (devicesMap) => Object.values(devicesMap || {}).sort((a, b) => {
+        if (a.online && !b.online) return -1;
+        if (!a.online && b.online) return 1;
+        return ((b.rxBytes || 0) + (b.txBytes || 0)) - ((a.rxBytes || 0) + (a.txBytes || 0));
+    });
+
+    const calcSummaryMetrics = (summary, deviceList) => {
+        const sysDelta = summary.sysDeltaBytes || 0;
+        const iptTotal = summary.iptTotalBytes || 0;
+        const iptV4 = summary.iptTotalV4Bytes || 0;
+        const iptV6 = summary.iptTotalV6Bytes || 0;
+        const onlineCount = deviceList.filter(d => d.online).length;
+        const deviceCount = summary.deviceCount || 0;
+        const deviceTotalBytes = summary.deviceTotalBytes || 0;
+        const sysTxDelta = summary.sysDeltaTxBytes || 0;
+        const sysRxDelta = summary.sysDeltaRxBytes || 0;
+        const diffSigned = sysDelta - iptTotal;
+        const diffAbs = Math.abs(diffSigned);
+        const unattrSigned = iptTotal - deviceTotalBytes;
+        const unattrAbs = Math.abs(unattrSigned);
+        const startMs = parseTs(summary.scriptStartAt);
+        const runtimeSec = Number.isFinite(startMs) ? Math.max(0, (Date.now() - startMs) / 1000) : 0;
+        const isWarmup = runtimeSec < 1800 || sysDelta < 104857600;
+        const diffThreshold = Math.max(sysDelta * 0.1, 10485760);
+        const unattrThreshold = Math.max(iptTotal * 0.3, 10485760);
+        const diffCls = (diffSigned < 0) ? 'ht-status-alert' : isWarmup ? 'ht-status-info' : (diffAbs > diffThreshold ? 'ht-status-warn' : 'ht-status-ok');
+        const unattrCls = (unattrSigned < 0) ? 'ht-status-alert' : isWarmup ? 'ht-status-info' : (unattrAbs > unattrThreshold ? 'ht-status-warn' : 'ht-status-ok');
+        const deviceTxBytes = deviceList.reduce((s, d) => s + (d.txBytes || 0), 0);
+        const deviceRxBytes = deviceList.reduce((s, d) => s + (d.rxBytes || 0), 0);
+        return { sysDelta, iptTotal, iptV4, iptV6, onlineCount, deviceCount, deviceTotalBytes, sysTxDelta, sysRxDelta, diffSigned, unattrSigned, diffCls, unattrCls, deviceTxBytes, deviceRxBytes };
+    };
+
+    const summaryHtmls = (m) => {
+        const _pv = Object.values(state.policyMap);
+        const blCount = _pv.filter(p => p.type === 'blacklist').length;
+        return [
+            `<div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}</div>${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}<div class="ht-summary-lbl">系统增量</div>`,
+            `<div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))} <span style="font-size:.48rem;opacity:.7">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap">v4:<span class="ht-up">${esc(htFormatBytes(m.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(m.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div>`,
+            `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${blCount ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">拉黑 <span class="ht-status-alert">${blCount}</span></div>` : ''}<div class="ht-summary-lbl">接入设备</div>`,
+            `<div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div>`,
+        ];
+    };
+
+    const resolveDisplayName = (device) => {
+        const uMac = (device.mac || '').toUpperCase();
+        const pending = localStorage.getItem(_pnKey(uMac));
+        if (pending !== null) {
+            return pending || (device.hostname || '').trim() || '未知设备';
+        }
+        return (device.customName || '').trim() || (device.hostname || '').trim() || '未知设备';
+    };
+
+    // ─── config read/write ────────────────────────────────────────────────────
+    const readStatus = async () => {
+        const result = await run(`
+echo __BOOT__
+timeout 2s awk '{print}' ${sq(BOOT_SH_FILE)} 2>/dev/null || true
+echo __PROC__
+_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo running=1 || echo running=0
+echo __DATA__
+timeout 3s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null || true
+echo __VER__
+timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
+`);
+        const text = String(result?.content || '');
+        const bootPart = text.includes('__BOOT__') ? text.split('__BOOT__')[1].split('__PROC__')[0] : '';
+        const procPart = text.includes('__PROC__') ? text.split('__PROC__')[1].split('__DATA__')[0] : '';
+        const dataPart = text.includes('__DATA__') ? text.split('__DATA__')[1].split('__VER__')[0] : '';
+        const verPart = text.includes('__VER__') ? text.split('__VER__')[1].trim() : '';
+        state._deviceVersion = (verPart || '').replace(/^pending:/, '');
+        state.installed = bootPart.includes(NAME) && procPart.includes('running=1');
+        if (dataPart.trim()) {
+            try {
+                const parsed = JSON.parse(dataPart.trim());
+                if (parsed && parsed.devices && typeof parsed.devices === 'object') {
+                    state.dataCache = parsed;
+                    state.lastUpdated = parsed.updatedAt || '';
+                    state.summary = parsed.summary || null;
+                }
+            } catch { }
+        }
+        for (const mac of Object.keys(state.dataCache?.devices || {})) {
+            const pv = localStorage.getItem(_pnKey(mac));
+            if (pv === null) continue;
+            const dev = state.dataCache.devices[mac];
+            if (pv === '' && !dev.customName) localStorage.removeItem(_pnKey(mac));
+            else if (pv && dev.customName === pv) localStorage.removeItem(_pnKey(mac));
+        }
+    };
+
+    // ─── install / uninstall ──────────────────────────────────────────────────
+    let _recoverTried = false;
+    const recoverDaemonOnce = async () => {
+        if (_recoverTried || state.installed) return;
+        _recoverTried = true;
+        const r = await run(`grep -q ${sq(NAME)} ${sq(BOOT_SH_FILE)} 2>/dev/null || exit 0; _p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
+        if (!String(r?.content || '').includes('__DEAD__')) return;
+        await run(`cp /sdcard/hotspot_traffic ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`, 10000);
+        await wait(1500);
+        await readStatus();
+        if (state.installed) createToast('检测到后台服务已停止，已自动恢复', 'green');
+    };
+
+    const KILL_DAEMON_SH = `_p=$(awk '{print}' ${sq(PID_FILE)} 2>/dev/null)
+if [ -n "$_p" ]; then
+kill -15 "$_p" 2>/dev/null
+_i=0; while kill -0 "$_p" 2>/dev/null && [ "$_i" -lt 15 ]; do sleep 0.1; _i=$((_i+1)); done
+_ep=$(awk '{print}' ${sq(DATA_DIR + '/.engine_pid')} 2>/dev/null)
+[ -n "$_ep" ] && kill -9 "$_ep" 2>/dev/null
+_tp=$(awk '{print}' ${sq(DATA_DIR + '/.tcpdump_pid')} 2>/dev/null)
+[ -n "$_tp" ] && kill -9 "$_tp" 2>/dev/null
+kill -9 "$_p" 2>/dev/null
+fi
+rm -f ${sq(PID_FILE)} ${sq(DATA_DIR + '/.engine_pid')} ${sq(DATA_DIR + '/.tcpdump_pid')}
+rm -rf ${sq(DATA_DIR + '/.lock_dir')}`;
+
+    const cleanResidue = async () => {
+        try {
+            await run(`
+${KILL_DAEMON_SH}
+sed -i '/${NAME}/d' ${sq(BOOT_SH_FILE)} 2>/dev/null
+rm -f /sdcard/hotspot_traffic /sdcard/hotspot_diag ${sq(LOG_FILE)} ${TRAFFIC_PROC} ${DIAG_PROC}
+rm -rf ${sq(DATA_DIR)}
+mkdir -p ${sq(DATA_DIR)}
+`, 10000);
+        } catch (e) { console.error('cleanResidue:', e); }
+    };
+
+    const pollDeployHeartbeat = (progress, timeoutMs = 120000) => {
+        return new Promise((resolve, reject) => {
+            const startTs = Date.now();
+            const hbFile = DATA_DIR + '/.deploy_heartbeat';
+            let readLines = 0, lastBeatTs = Date.now(), hadBeat = false;
+            const poll = setInterval(async () => {
+                if (Date.now() - startTs > timeoutMs) { clearInterval(poll); reject(htErr('部署超时(' + Math.round((Date.now() - startTs) / 1000) + 's)')); return; }
+                if (Date.now() - lastBeatTs > 70000) { clearInterval(poll); reject(htErr('后台无响应(心跳中断' + Math.round((Date.now() - lastBeatTs) / 1000) + 's)')); return; }
+                const r = await run(`awk -v s=${readLines} 'NR>s' ${sq(hbFile)} 2>/dev/null`, 2000);
+                const content = String(r?.content || '').trim();
+                if (!content) {
+                    if (hadBeat) {
+                        const chk = await run(`[ -f ${sq(hbFile)} ] && echo 1`, 1000);
+                        if (!String(chk?.content || '').trim()) {
+                            clearInterval(poll); reject(htErr('后台进程异常终止')); return;
+                        }
+                    }
+                    return;
+                }
+                const lines = content.split('\n');
+                readLines += lines.length;
+                lastBeatTs = Date.now();
+                hadBeat = true;
+                for (const line of lines) {
+                    const parts = line.split('|');
+                    const step = parts[1], status = parts[2], detail = parts[3] || '';
+                    if (['running','done','warn'].includes(status)) progress(step, status, detail);
+                    if (status === 'failed') { progress(step, 'failed', detail); clearInterval(poll); const _e = htErr(detail || step); _e.htStep = step; reject(_e); return; }
+                    if (step === 'complete' && status === 'done') { clearInterval(poll); resolve(); return; }
+                }
+            }, 500);
+        });
+    };
+
+    const executeDeploy = async (deployBin, manifest, prevVer, progress) => {
+        await run(`rm -f ${sq(DATA_DIR + '/.deploy_heartbeat')}`);
+        const bestNode = await probeBestCdn();
+        const allNodes = [bestNode, ...CDN_MIRRORS.filter(m => m !== bestNode), CDN_ORIGIN].filter((v, i, a) => a.indexOf(v) === i);
+        const mirrors = allNodes.join(' ');
+        const cmd = [sq(deployBin), sq(manifest.version),
+            sq(manifest.guardUrl), sq(manifest.diagUrl),
+            sq(manifest.jsUrl), sq(manifest.md5),
+            sq(prevVer), sq(mirrors)].join(' ');
+        const proc = run(cmd, 120000);
+        await pollDeployHeartbeat(progress);
+        await proc;
+        await run(`rm -f ${sq(deployBin)}`);
+        await applyPluginJs(prevVer);
+    };
+
+    // ─── 启用/更新进度弹窗 ───
+    const DEPLOY_STEPS = [
+        { id: 'env',        label: '检查设备环境' },
+        { id: 'manifest',   label: '获取版本信息' },
+        { id: 'dl_deploy',  label: '下载部署脚本' },
+        { id: 'dl_guard',   label: '下载监控组件' },
+        { id: 'dl_diag',    label: '下载诊断组件' },
+        { id: 'dl_js',      label: '下载界面组件' },
+        { id: 'prepare_js', label: '准备界面更新' },
+        { id: 'deploy',     label: '部署文件' },
+        { id: 'restart',    label: '切换服务' },
+        { id: 'complete',   label: '完成' },
+    ];
+    const UPDATE_DEPLOY_STEPS = DEPLOY_STEPS.filter(s => s.id !== 'env');
+    const VERIFY_STEP = { id: 'verify', label: '校验完整性' };
+
+    const showFlowProgress = (title, steps, failPrefix = '启用失败') => {
+        document.querySelector('#ht_flow_progress')?.remove();
+        const st = {};
+        const stHint = {};
+        steps.forEach(s => { st[s.id] = 'pending'; stHint[s.id] = ''; });
+        let failInfo = null;
+        let finished = false;
+        const ICONS = {
+            pending: '<span style="color:#94a3b8;flex-shrink:0">○</span>',
+            running: '<span style="flex-shrink:0;display:inline-block;animation:ht_spin 1s linear infinite">⏳</span>',
+            done: '<span style="color:#86efac;flex-shrink:0">✓</span>',
+            warn: '<span style="color:#fbbf24;flex-shrink:0">!</span>',
+            failed: '<span style="color:#f87171;flex-shrink:0">✗</span>',
+        };
+        const renderBody = () => {
+            const doneN = steps.filter(s => st[s.id] === 'done').length;
+            const pct = finished ? 100 : Math.round(doneN / steps.length * 100);
+            const rows = steps.map(s => `<div style="display:flex;align-items:center;gap:8px;padding:3px 6px;border-radius:5px;font-size:.62rem;line-height:1.5;${st[s.id] === 'running' ? 'background:rgba(59,130,246,.15);' : ''}">${ICONS[st[s.id]] || ICONS.pending}<span>${esc(s.label)}${stHint[s.id] ? ' <span style="opacity:.6;font-size:.56rem">(' + esc(stHint[s.id]) + ')</span>' : ''}</span></div>`).join('');
+            let failHtml = '';
+            if (failInfo) {
+                failHtml = `
+                <div style="margin-top:8px;color:#f87171;font-size:.62rem;line-height:1.6">${esc(failPrefix)}：${esc(failInfo.userMsg)}</div>
+                <div style="margin-top:6px"><button id="ht_flow_detail_btn" style="font-size:.58rem">查看详细信息</button></div>
+                <div id="ht_flow_detail" style="display:none;margin-top:6px;font-family:monospace;font-size:.52rem;max-height:22vh;overflow-y:auto;word-break:break-all;background:rgba(0,0,0,.3);border-radius:6px;padding:8px">${failInfo.detailHtml}</div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="ht_flow_retry" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.25);color:#86efac;cursor:pointer;">重试</button><button id="ht_flow_close" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:inherit;cursor:pointer;">关闭</button></div>`;
+            }
+            return `
+                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">${esc(title)}${qqBtnHtml('ht_flow_qq')}</div>
+                <div style="height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin:8px 0;overflow:hidden"><div style="height:100%;width:${pct}%;background:#4ade80;border-radius:2px;transition:width .3s"></div></div>
+                <div>${rows}</div>${failHtml}`;
+        };
+        const { el, close } = createFixedToast('ht_flow_progress', `<div id="ht_flow_box" style="pointer-events:all;width:88vw;max-width:380px"></div>`);
+        const box = el.querySelector('#ht_flow_box');
+        const redraw = () => {
+            box.innerHTML = renderBody();
+            const qq = box.querySelector('#ht_flow_qq');
+            if (qq) qq.onclick = () => groupTip('群号已复制', 'green');
+            const db = box.querySelector('#ht_flow_detail_btn');
+            if (db) db.onclick = () => { const d = box.querySelector('#ht_flow_detail'); if (d) d.style.display = d.style.display === 'none' ? 'block' : 'none'; };
+            const rb = box.querySelector('#ht_flow_retry');
+            if (rb) rb.onclick = () => { close(); if (typeof failInfo?.onRetry === 'function') failInfo.onRetry(); };
+            const cb = box.querySelector('#ht_flow_close');
+            if (cb) cb.onclick = () => close();
+        };
+        redraw();
+        return {
+            setStep: (id, status, hint) => { if (st[id] !== undefined) { st[id] = status; stHint[id] = hint || ''; redraw(); } },
+            addStep: (afterId, stepDef) => { const idx = steps.findIndex(s => s.id === afterId); if (idx === -1) return; steps.splice(idx + 1, 0, stepDef); st[stepDef.id] = 'pending'; stHint[stepDef.id] = ''; redraw(); },
+            fail: (id, userMsg, detail, onRetry) => {
+                if (st[id] !== undefined) st[id] = 'failed';
+                const detailHtml = esc(new Date().toLocaleString() + ' | 插件版本: ' + (_PREV_VER || '初装') + '→' + (_manifest?.version || '?') + ' | 阶段: ' + id + ' | 详情: ' + (detail || '(无)') + ' | UA: ' + (navigator.userAgent || '').slice(0, 80) + ((navigator.userAgent || '').length > 80 ? '…' : ''));
+                failInfo = { userMsg, detailHtml, onRetry };
+                redraw();
+            },
+            done: () => {
+                steps.forEach(s => { if (st[s.id] !== 'warn') st[s.id] = 'done'; });
+                finished = true; failInfo = null; redraw();
+                setTimeout(close, 800);
+            },
+            close,
+        };
+    };
+
+    const install = async () => {
+        if (state._installing) return createToast('正在启用中，请稍候', 'yellow');
+        if (!(await checkAdvancedFunc())) return createToast('没有开启高级功能，无法使用！', 'red');
+        state._installing = true;
+        const flow = showFlowProgress('启用热点流量监控', DEPLOY_STEPS);
+        let curStep = 'env';
+        const at = (id) => { curStep = id; flow.setStep(id, 'running'); };
+        const ok = (id) => flow.setStep(id, 'done');
+        try {
+            at('env');
+            const probeR = await run(`iptables -w 5 -L FORWARD -n 2>&1 && echo __OK__`, 8000);
+            if (!String(probeR?.content || '').includes('__OK__'))
+                throw htErr('设备网络组件检查未通过', String(probeR?.content || '').trim().slice(0, 200));
+            ok('env');
+
+            at('manifest');
+            let rawManifest = await fetchManifestAllNodes(
+                _PREV_VER ? 'v' + _PREV_VER + '.json' : 'latest.json'
+            );
+            if (!rawManifest && _PREV_VER) {
+                flow.setStep('manifest', 'running', '兜底源');
+                rawManifest = await fetchManifestAllNodes('latest.json');
+            }
+            if (!rawManifest) throw htErr('无法获取版本信息，请检查网络后重试', _lastManifestErr);
+            _manifest = parseManifest(rawManifest);
+            if (!_manifest) throw htErr('版本信息格式异常');
+            ok('manifest');
+            if (_manifest.md5) flow.addStep('dl_js', VERIFY_STEP);
+
+            await cleanResidue();
+            await run(`mkdir -p ${sq(DATA_DIR)}`);
+
+            at('dl_deploy');
+            const deployBin = await downloadDeployScript(
+                _manifest.deployUrl,
+                (id, st, hint) => flow.setStep(id, st, hint)
+            );
+            ok('dl_deploy');
+
+            curStep = 'deploy';
+            await executeDeploy(deployBin, _manifest, _PREV_VER || '', (step, status, detail) => {
+                flow.setStep(step, status, detail);
+            });
+
+            await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
+
+            state.installed = true;
+            state._deviceVersion = _manifest.version;
+            flow.done();
+            createToast('已启用 v' + _manifest.version + '，2秒后刷新', 'green');
+            setTimeout(() => location.reload(), 2000);
+        } catch (e) {
+            flow.fail(e?.htStep || curStep, e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已重试' + e.htAttempts + '次' : ''), startInstallFlow);
+        } finally { state._installing = false; }
+    };
+
+    const startInstallFlow = async () => {
+        await install();
+        if (state.installed) await loadData();
+        renderIntoPanel();
+        if (state.installed) setAutoData(true);
+    };
+
+    const uninstall = async () => {
+        if (state._uninstalling) return createToast('正在卸载中，请稍候', 'yellow');
+        if (!(await checkAdvancedFunc())) return createToast('没有开启高级功能，无法使用！', 'red');
+        state._uninstalling = true;
+        setAutoData(false);
+        _dataEvtBound = false;
+        try {
+            await run(`
+sed -i '/${NAME}/d' ${sq(BOOT_SH_FILE)} 2>/dev/null
+${KILL_DAEMON_SH}
+rm -f ${sq(TRAFFIC_BIN_FILE)} ${sq(DIAG_BIN_FILE)} ${sq(LOG_FILE)} ${TRAFFIC_PROC} ${DIAG_PROC} ${sq(WEBHOOK_FILE)} ${sq(TRAFFIC_BIN_FILE + '.b64')} ${sq(DIAG_BIN_FILE + '.b64')} ${sq(PENDING_JS_FILE)}
+rm -rf ${sq(DATA_DIR)}
+`, 10000);
+            try { Object.keys(localStorage).filter(k => k.startsWith(LS_KEY) || k === '#collapse_ht').forEach(k => localStorage.removeItem(k)); } catch (e) {}
+            state.installed = false; state.dataCache = null; state.lastUpdated = ''; state.summary = null;
+            clearDiagState();
+            createToast('热点流量监控已停用');
+        } catch (e) {
+            createToast('停用失败：' + (e && e.message ? e.message : String(e)), 'red');
+        }
+        state._uninstalling = false;
+    };
+
+    const showUninstallConfirm = () => {
+        document.querySelector('#ht_uninstall_confirm')?.remove();
+        let clicks = 0;
+        const { el, close } = createFixedToast('ht_uninstall_confirm', `
+            <div style="pointer-events:all;width:80vw;max-width:300px">
+                <div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">停用插件${qqBtnHtml('ht_uninstall_qq')}</div>
+                <div style="margin:10px 0;font-size:.64rem;line-height:1.6">停用后，流量统计数据将被清除且无法找回；自定义设备名称也会被清除，需重新设置（自动识别的名称会在重新启用并且设备重新连接后恢复）。是否继续？</div>
+                <div style="display:flex;gap:6px;justify-content:flex-end"><button style="font-size:.62rem" id="ht_uninstall_confirm_confirm">确认</button><button style="font-size:.62rem" id="ht_uninstall_confirm_close">取消</button></div>
+            </div>`);
+        el.querySelector('#ht_uninstall_qq').onclick = () => groupTip('群号已复制', 'green');
+        const onClose = () => true;
+        const onConfirm = async () => {
+            clicks++;
+            if (clicks < 3) {
+                const remain = 3 - clicks;
+                const btn = el.querySelector('#ht_uninstall_confirm_confirm');
+                if (btn) btn.textContent = `确认(再点${remain}次)`;
+                createToast(`再点 ${remain} 次即可停用`, 'pink', 1500);
+                return false;
+            }
+            const btn = el.querySelector('#ht_uninstall_confirm_confirm');
+            if (btn) btn.disabled = true;
+            close();
+            const { close: closeLoading } = createFixedToast('ht_uninstall_loading', '正在停用...');
+            try {
+                await uninstall();
+                renderIntoPanel();
+            } finally { closeLoading(); }
+            return false;
+        };
+        el.querySelector('#ht_uninstall_confirm_confirm').onclick = async () => { if (await onConfirm()) close(); };
+        el.querySelector('#ht_uninstall_confirm_close').onclick = () => { if (onClose()) close(); };
+    };
+
+    // ─── report ──────────────────────────────────────────────────────────────
+    const _reportDataCache = { key: null, data: null, ts: 0 };
+
+    const loadReportData = async (startDate, endDate) => {
+        const cacheKey = startDate + '_' + endDate;
+        if (_reportDataCache.key === cacheKey && _reportDataCache.data && Date.now() - _reportDataCache.ts < 300000) {
+            return _reportDataCache.data;
+        }
+        const cmd = `timeout 30s ${sq(JQ)} --arg sd ${sq(startDate)} --arg ed ${sq(endDate)} -sc '[.[] | select(.date >= $sd and .date <= $ed) | {date:.date,devices:[.devices|to_entries[]|{m:.key,h:.value.hostname,c:.value.customName,tx:.value.txBytes,rx:.value.rxBytes}],sd:.summary.sysDeltaBytes,sdTx:.summary.sysDeltaTxBytes,sdRx:.summary.sysDeltaRxBytes,it:.summary.iptTotalBytes,itV4:.summary.iptTotalV4Bytes,itV6:.summary.iptTotalV6Bytes,dt:.summary.deviceTotalBytes}] | {days:.}' ${sq(DATA_DIR + '/data_history')}/*.json 2>/dev/null || echo '{"days":[]}'`;
+        const result = await run(cmd, 35000);
+        _reportDataCache.key = cacheKey;
+        _reportDataCache.data = result;
+        _reportDataCache.ts = Date.now();
+        return result;
+    };
+
+    const aggregateReport = (rawDays, nameMap, startDate, endDate) => {
+        const namedMap = {};
+        const stableMap = {};
+        const randomByDay = [];
+        const macHostRaw = {};
+
+        for (const day of rawDays) {
+            const randDevs = [];
+            for (const dev of day.devices) {
+                const total = (dev.tx || 0) + (dev.rx || 0);
+                if (total === 0) continue;
+                if ((dev.h || '').trim()) {
+                    const _u = dev.m.toUpperCase();
+                    if (!macHostRaw[_u] || day.date >= macHostRaw[_u].date) macHostRaw[_u] = { h: dev.h.trim(), date: day.date };
+                }
+                const resolvedName = (nameMap[dev.m.toUpperCase()] || '').trim();
+                if (resolvedName) {
+                    if (!namedMap[resolvedName]) namedMap[resolvedName] = { name: resolvedName, macs: new Set(), totalTx: 0, totalRx: 0, activeDates: new Set() };
+                    namedMap[resolvedName].macs.add(dev.m.toUpperCase());
+                    namedMap[resolvedName].totalTx += dev.tx || 0;
+                    namedMap[resolvedName].totalRx += dev.rx || 0;
+                    namedMap[resolvedName].activeDates.add(day.date);
+                } else if (!isRandomMac(dev.m) && (dev.h || '').trim()) {
+                    if (!stableMap[dev.m]) stableMap[dev.m] = { mac: dev.m, hostname: dev.h, totalTx: 0, totalRx: 0, activeDates: new Set(), lastDate: '' };
+                    stableMap[dev.m].totalTx += dev.tx || 0;
+                    stableMap[dev.m].totalRx += dev.rx || 0;
+                    stableMap[dev.m].activeDates.add(day.date);
+                    if (day.date > stableMap[dev.m].lastDate) { stableMap[dev.m].lastDate = day.date; stableMap[dev.m].hostname = dev.h; }
+                } else {
+                    randDevs.push({ mac: dev.m, bytes: total, tx: dev.tx || 0, rx: dev.rx || 0, hostname: (dev.h || '').trim() });
+                }
+            }
+            if (randDevs.length) randomByDay.push({ date: day.date, devices: randDevs.sort((a, b) => b.bytes - a.bytes) });
+        }
+
+        const named = Object.values(namedMap).sort((a, b) => (b.totalTx + b.totalRx) - (a.totalTx + a.totalRx));
+        const stable = Object.values(stableMap).sort((a, b) => (b.totalTx + b.totalRx) - (a.totalTx + a.totalRx));
+        const totalDeviceBytes = [...named, ...stable].reduce((s, d) => s + d.totalTx + d.totalRx, 0) + randomByDay.reduce((s, d) => s + d.devices.reduce((ss, dd) => ss + dd.bytes, 0), 0);
+
+        const fullDates = (startDate && endDate) ? dateRange(startDate, endDate) : rawDays.map(d => d.date);
+        const dtByDate = {}, sdByDate = {}, itByDate = {};
+        rawDays.forEach(d => { dtByDate[d.date] = d.dt || 0; sdByDate[d.date] = d.sd || 0; itByDate[d.date] = d.it || 0; });
+
+        let _sysTotal = 0, _sysTx = 0, _sysRx = 0, _iptTotal = 0, _iptV4 = 0, _iptV6 = 0, _devTotal = 0, _devTx = 0, _devRx = 0;
+        for (const _d of rawDays) { _sysTotal += _d.sd || 0; _sysTx += _d.sdTx || 0; _sysRx += _d.sdRx || 0; _iptTotal += _d.it || 0; _iptV4 += _d.itV4 || 0; _iptV6 += _d.itV6 || 0; _devTotal += _d.dt || 0; for (const _dd of _d.devices) { _devTx += _dd.tx || 0; _devRx += _dd.rx || 0; } }
+
+        return {
+            summary: {
+                sysTotal: _sysTotal, sysTx: _sysTx, sysRx: _sysRx,
+                iptTotal: _iptTotal, iptV4: _iptV4, iptV6: _iptV6,
+                devTotal: _devTotal, devTx: _devTx, devRx: _devRx,
+                days: fullDates.length,
+                knownCount: named.length + stable.length,
+                totalCount: named.length + stable.length + new Set(randomByDay.flatMap(d => d.devices.map(dd => dd.mac))).size,
+                totalDeviceBytes,
+            },
+            dailyTotals: fullDates.map(date => ({ date, sd: sdByDate[date] || 0, it: itByDate[date] || 0, dt: dtByDate[date] || 0 })),
+            named, stable, random: randomByDay.sort((a, b) => b.date.localeCompare(a.date)),
+            macHostnames: Object.keys(macHostRaw).reduce((m, k) => { m[k] = macHostRaw[k].h; return m; }, {}),
+        };
+    };
+
+    const computeTags = (device, totalDeviceBytes, totalDays) => {
+        const tags = [];
+        const total = (device.totalTx || 0) + (device.totalRx || 0);
+        const activeDays = device.activeDates ? device.activeDates.size : 0;
+        if (totalDays > 0) {
+            if (activeDays >= totalDays * 0.7) tags.push({ text: '高频用户', cls: 'ht-rpt-tag-freq' });
+            else if (activeDays <= totalDays * 0.2) tags.push({ text: '偶尔使用', cls: 'ht-rpt-tag-rare' });
+        }
+        if (totalDeviceBytes > 0 && total > totalDeviceBytes * 0.25) tags.push({ text: '流量大户', cls: 'ht-rpt-tag-heavy' });
+        else if (total < 104857600) tags.push({ text: '轻度使用', cls: 'ht-rpt-tag-rare' });
+        if (total > 0) {
+            const rx = device.totalRx || 0;
+            const tx = device.totalTx || 0;
+            if (rx / total > 0.85) tags.push({ text: '下载为主', cls: 'ht-rpt-tag-down' });
+            else if (tx / total > 0.6) tags.push({ text: '上传为主', cls: 'ht-rpt-tag-up' });
+        }
+        return tags;
+    };
+
+    // ─── data ─────────────────────────────────────────────────────────────────
+    const loadData = async (preloaded) => {
+        if (preloaded && preloaded.devices && typeof preloaded.devices === 'object') {
+            state.dataCache = preloaded;
+            state.lastUpdated = preloaded.updatedAt || '';
+            state.summary = preloaded.summary || null;
+            return;
+        }
+        try {
+            const result = await run(`[ -f ${sq(DATA_FILE)} ] && timeout 3s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null || echo '{}'`, 5000);
+            const raw = String(result?.content ?? '').trim();
+            if (!raw || !raw.startsWith('{')) return;
+
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed.devices !== 'object' || !parsed.summary) {
+                console.warn('[HT] data.json 结构不完整，跳过本轮');
+                return;
+            }
+            state.dataCache = parsed;
+            state.lastUpdated = parsed.updatedAt || '';
+            state.summary = parsed.summary || null;
+
+            if (!state._clientIp) {
+                try {
+                    const ufi = await getUFIData();
+                    if (ufi?.client_ip) state._clientIp = ufi.client_ip;
+                } catch {}
+            }
+        } catch (e) { console.warn('[HT] loadData:', e); }
+    };
+
+    let dataLoading = false;
+    const refreshDataArea = async (preloaded) => {
+        const area = document.querySelector(`#${MODAL} #ht_data_area`);
+        if (!area) return;
+        if (area.querySelector('[data-ht]')) {
+            await patchDataArea(preloaded);
+            return;
+        }
+        if (dataLoading) return;
+        dataLoading = true;
+        try {
+            await loadData(preloaded);
+            area.innerHTML = renderDataArea();
+            initDataDelegate();
+        } finally { dataLoading = false; }
+    };
+
+    const _patchSummaryGrid = (el, deviceList) => {
+        const summary = state.summary;
+        if (!summary) return;
+        const m = calcSummaryMetrics(summary, deviceList);
+        summaryHtmls(m).forEach((html, i) => { const n = el.querySelector(`[data-ht="si_${i}"]`); if (n && n.innerHTML !== html) n.innerHTML = html; });
+    };
+
+    const _isDeviceOrderChanged = (tbody, deviceList) => {
+        const domMacs = [];
+        tbody.querySelectorAll('tr[data-mac]').forEach(tr => domMacs.push(tr.dataset.mac));
+        const newMacs = deviceList.map(d => d.mac);
+        return domMacs.length !== newMacs.length || domMacs.some((m, i) => m !== newMacs[i]);
+    };
+
+    const _patchDeviceRow = (tr, device, index) => {
+        const displayName = resolveDisplayName(device);
+        const txBytes = device.txBytes || 0;
+        const rxBytes = device.rxBytes || 0;
+        const totalBytes = txBytes + rxBytes;
+        const p = (attr, val) => { const n = tr.querySelector(`[data-ht="${attr}"]`); if (n && n.textContent !== val) n.textContent = val; };
+        p('idx', String(index + 1));
+        const isMe = device.ip && device.ip === state._clientIp;
+        const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
+        const nameHtml = `${esc(displayName)}${meTag}`;
+        const nameEl = tr.querySelector('[data-ht="name"]');
+        if (nameEl && nameEl.innerHTML !== nameHtml) nameEl.innerHTML = nameHtml;
+        p('ip', device.ip || '');
+        const tfEl = tr.querySelector('[data-ht="tf"]');
+        const tfHtml = renderTrafficRateCell(device, totalBytes, txBytes, rxBytes);
+        if (tfEl && tfEl.innerHTML !== tfHtml) tfEl.innerHTML = tfHtml;
+        const polEl = tr.querySelector('[data-ht="pol"]');
+        if (polEl) { const pol = state.policyMap[device.mac]; const wantBg = pol?.type === 'blacklist' ? '#f87171' : ''; if (polEl.style.background !== wantBg) { polEl.style.display = pol ? 'inline-block' : 'none'; polEl.style.background = wantBg; } }
+        const dot = tr.querySelector('[data-ht="dot"]');
+        if (dot) { const cls = device.online ? 'ht-dot ht-dot-green' : 'ht-dot ht-dot-gray'; if (dot.className !== cls) dot.className = cls; }
+    };
+
+    const patchDataArea = async (preloaded) => {
+        if (dataLoading) return;
+        dataLoading = true;
+        try {
+            await loadData(preloaded);
+            const el = document.querySelector(`#${MODAL} #ht_data_area`);
+            if (!el || !state.dataCache) return;
+            const deviceList = sortDevices(state.dataCache.devices || {});
+            _patchSummaryGrid(el, deviceList);
+            const tbody = el.querySelector('tbody');
+            if (!tbody) { if (deviceList.length > 0) { el.innerHTML = renderDataArea(); initDataDelegate(); } return; }
+            if (tbody.querySelector('tr') && (!tbody.querySelector('[data-ht="tf"]') || !tbody.querySelector('td:nth-child(2) > [data-edit-mac]') || !tbody.querySelector('td:nth-child(4)'))) {
+                tbody.innerHTML = deviceList.map((d, i) => renderDeviceRow(d, i)).join('');
+            } else if (_isDeviceOrderChanged(tbody, deviceList)) {
+                tbody.innerHTML = deviceList.map((d, i) => renderDeviceRow(d, i)).join('');
+            } else {
+                deviceList.forEach((device, i) => { const tr = tbody.querySelector(`tr[data-mac="${esc(device.mac)}"]`); if (tr) _patchDeviceRow(tr, device, i); });
+            }
+            const updatedShort = state.lastUpdated ? state.lastUpdated.slice(11, 19) : '';
+            const dateEl = el.querySelector('[data-ht="sum_date"]');
+            if (dateEl) { const txt = updatedShort ? `（更新时间 ${updatedShort}）` : ''; if (dateEl.textContent !== txt) dateEl.textContent = txt; }
+        } finally { dataLoading = false; }
+    };
+
+    // ─── log popup ────────────────────────────────────────────────────────────
+    const copyToClipboard = async (text) => {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text); return true;
+            }
+        } catch {}
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        } catch { return false; }
+    };
+
+    const groupTip = async (msg, color, ms) => { await copyToClipboard(QQ_GROUP); return createToast(msg, color, ms); };
+    const qqBtnHtml = (id) => `<span id="${id}" title="点击复制群号" style="font-size:.64rem;font-weight:700;cursor:pointer;margin-left:auto;color:#bae6fd;background:rgba(56,189,248,.16);border:1px solid rgba(56,189,248,.42);border-radius:7px;padding:2px 9px;line-height:1.35;white-space:nowrap;letter-spacing:.3px;">反馈群:${QQ_GROUP}</span>`;
+
+    const showLogPopup = async () => {
+        const fetchLog = async () => {
+            const r = await run(`[ -f ${sq(LOG_FILE)} ] && timeout 2s tail -80 ${sq(LOG_FILE)} || echo "(暂无日志)"`, 5000);
+            return String(r?.content ?? '').trim();
+        };
+        const logText = await fetchLog();
+        const { el: toastEl, close } = createFixedToast('ht_log_toast', `<div style="pointer-events:all;width:90vw;max-width:420px"><div class="title" style="margin:0 0 6px;display:flex;align-items:center;justify-content:space-between">运行日志${qqBtnHtml('ht_log_qq')}</div><textarea id="ht_log_area" readonly style="width:100%;height:40vh;font-size:.56rem;line-height:1.5;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:6px;color:inherit;resize:none;"></textarea><div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px"><button id="ht_log_refresh" style="font-size:.6rem">刷新</button><button id="ht_log_copy" style="font-size:.6rem">复制</button><button id="ht_log_close" style="font-size:.6rem">关闭</button></div></div>`);
+        const area = toastEl.querySelector('#ht_log_area');
+        area.value = logText; area.scrollTop = area.scrollHeight;
+        toastEl.querySelector('#ht_log_qq').onclick = () => groupTip('群号已复制', 'green');
+        toastEl.querySelector('#ht_log_refresh').onclick = async () => { area.value = await fetchLog(); area.scrollTop = area.scrollHeight; };
+        toastEl.querySelector('#ht_log_copy').onclick = async () => { await copyToClipboard(area.value); createToast('日志已复制', 'green'); };
+        toastEl.querySelector('#ht_log_close').onclick = () => close();
+    };
+
+    const stopAutoData = () => { if (state.autoDataTimer) clearInterval(state.autoDataTimer); state.autoDataTimer = null; };
+    const setAutoData = (enabled) => {
+        if (state._viewMode === 'report') { stopAutoData(); state.autoData = false; return; }
+        state.autoData = Boolean(enabled && state.installed);
+        stopAutoData();
+        if (state.autoData) {
+            state.autoDataTimer = setInterval(async () => {
+                if (document.querySelector('#collapse_ht')?.dataset?.name !== 'open' || !state.installed || !state.autoData) { setAutoData(false); return; }
+                const r = await run(`_mt=$(stat -c %Y ${sq(DATA_FILE)} 2>/dev/null || echo 0)
+echo "$_mt"
+if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}' ${sq(DATA_FILE)} 2>/dev/null; fi`, 5000);
+                const raw = String(r?.content || '');
+                const nl = raw.indexOf('\n');
+                const mtKey = (nl >= 0 ? raw.slice(0, nl) : raw).trim();
+                const body = nl >= 0 ? raw.slice(nl + 1).trim() : '';
+                if (mtKey === state._lastMtimeKey && state.dataCache) return;
+                state._lastMtimeKey = mtKey;
+                if (body) {
+                    try { refreshDataArea(JSON.parse(body)); return; } catch (e) { console.warn('[HT] poll parse:', e); }
+                }
+                refreshDataArea();
+            }, 5000);
+        }
+    };
+
+    // ─── style ────────────────────────────────────────────────────────────────
+    const ensureStyle = () => {
+        let s = document.getElementById(STYLE);
+        if (!s) {
+            s = document.createElement('style');
+            s.id = STYLE;
+            document.head.appendChild(s);
+        }
+        s.textContent = `
+      #${MODAL} .ht-wrap{display:flex;flex-direction:column;gap:2px;font-size:.72rem;}
+      #${MODAL} .ht-card{border:1px solid rgba(255,255,255,.08);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border-radius:12px;padding:8px 10px;}
+      #${MODAL} .ht-wrap>.ht-card:first-child{padding-top:6px;padding-bottom:6px;}
+      #${MODAL} #ht_data_area{display:flex;flex-direction:column;gap:2px;}
+      #${MODAL} .ht-row{display:flex;align-items:center;gap:5px;}
+      #${MODAL} .ht-btn{border-radius:7px;padding:5px 10px;font-size:.64rem;cursor:pointer;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:inherit;transition:background .15s,opacity .15s;}
+      #${MODAL} .ht-btn:hover{background:rgba(255,255,255,.14);}
+      #${MODAL} .ht-btn:disabled{opacity:.35;cursor:not-allowed;}
+      #${MODAL} .ht-btn-success{background:rgba(34,197,94,.22);border-color:rgba(34,197,94,.35);color:#86efac;}
+      #${MODAL} .ht-btn-stop{background:rgba(249,115,22,.22);border-color:rgba(249,115,22,.35);color:#fdba74;}
+      #${MODAL} .ht-btn-ghost{background:transparent;border-color:rgba(255,255,255,.12);opacity:.8;}
+      #${MODAL} .ht-btn-ghost:hover{opacity:1;background:rgba(255,255,255,.06);}
+      #${MODAL} .ht-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;}
+      #${MODAL} .ht-dot-green{background:#4ade80;box-shadow:0 0 4px rgba(74,222,128,.5);}
+      #${MODAL} .ht-dot-gray{background:rgba(255,255,255,.25);}
+      #${MODAL} .ht-tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+      #${MODAL} .ht-tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.62rem;}
+      #${MODAL} .ht-tbl th{font-size:.54rem;opacity:.45;font-weight:500;text-align:left;padding:3px 2px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap;}
+      #${MODAL} .ht-tbl td{padding:1px 2px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle;}
+      #${MODAL} .ht-tbl th:first-child,#${MODAL} .ht-tbl td:first-child{padding-left:0;}
+      #${MODAL} .ht-tbl th:last-child,#${MODAL} .ht-tbl td:last-child{padding-right:0;}
+      #${MODAL} .ht-tbl tr:last-child td{border-bottom:none;}
+      #${MODAL} .ht-tbl .ht-td-name{font-weight:600;display:flex;align-items:center;gap:3px;line-height:1.2;}
+      #${MODAL} .ht-tbl .ht-td-meta{font-size:.52rem;opacity:.4;line-height:1.3;word-break:break-all;margin-top:1px;}
+      #${MODAL} .ht-tbl .ht-td-num{font-weight:600;white-space:nowrap;font-size:.6rem;font-variant-numeric:tabular-nums;}
+      #${MODAL} .ht-rate-seg{display:inline;}
+      #${MODAL} .ht-mac{cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.2);}
+      #${MODAL} .ht-mac:hover{opacity:.85;}
+      #${MODAL} .ht-edit-mini{background:rgba(102,126,234,.15);border:none;cursor:pointer;opacity:1;font-size:.6rem;padding:4px 4.5px;color:#a5b4fc;line-height:1;flex-shrink:0;border-radius:4px;transition:background .15s,color .15s;}
+      #${MODAL} .ht-edit-mini:hover{background:rgba(102,126,234,.3);color:#fff;}
+      #ht_dev_name::placeholder{color:#475569;opacity:1;}
+      #${MODAL} .ht-up{color:#67e8f9;}
+      #${MODAL} .ht-down{color:#86efac;}
+      #${MODAL} .ht-total{color:rgba(255,255,255,.7);}
+      #${MODAL} .ht-summary-item .ht-up,#${MODAL} .ht-summary-item .ht-down{color:inherit;}
+      #${MODAL} .ht-muted{color:rgba(255,255,255,.35);}
+      #${MODAL} .ht-status-ok{color:#86efac;}
+      #${MODAL} .ht-status-warn{color:#fdba74;}
+      #${MODAL} .ht-status-alert{color:#fca5a5;}
+      #${MODAL} .ht-status-info{color:#9ca3af;}
+      #${MODAL} .ht-empty{padding:10px;border:1px dashed rgba(255,255,255,.12);border-radius:9px;opacity:.55;text-align:center;font-size:.6rem;}
+      @keyframes ht_spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+      #${MODAL} .ht-updated{font-size:.52rem;opacity:.35;margin-left:auto;}
+      #${MODAL} .ht-date{font-size:.56rem;opacity:.5;margin-left:6px;color:#93c5fd;}
+      #${MODAL} .ht-summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;}
+      #${MODAL} .ht-summary-item{background:rgba(0,0,0,.12);border-radius:8px;padding:6px 8px;}
+      #${MODAL} .ht-summary-val{font-size:.76rem;font-weight:700;margin-bottom:1px;line-height:1.15;}
+      #${MODAL} .ht-summary-lbl{font-size:.52rem;opacity:.45;line-height:1.25;}
+      #${MODAL} .ht-diag-item{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:.58rem;line-height:1.35;word-break:break-all;}
+      @media(max-width:570px){#${MODAL} .ht-summary-grid{grid-template-columns:repeat(2,1fr);}}
+      @media(max-width:380px){#${MODAL} .ht-wrap{font-size:.66rem;gap:2px;} #${MODAL} .ht-card{padding:7px 9px;} #${MODAL} .ht-summary-val{font-size:.7rem;} #${MODAL} .ht-tbl{font-size:.58rem;} #${MODAL} .ht-btn{padding:4px 8px;font-size:.6rem;}}
+      @media(max-width:480px){#${MODAL} .ht-rate-seg{display:block;margin-top:1px;} #${MODAL} .ht-tbl td.ht-total{white-space:normal;}}
+      #${MODAL} .ht-rpt-header{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+      #${MODAL} .ht-rpt-title{font-weight:700;font-size:.68rem;}
+      #${MODAL} .ht-rpt-date{background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.12);border-radius:6px;color:inherit;font-size:.54rem;padding:2px 6px;width:auto;}
+      #${MODAL} .ht-rpt-sep{font-size:.5rem;opacity:.4;}
+      #${MODAL} .ht-rpt-section{margin-top:0;}
+      #${MODAL} .ht-rpt-chart-hd{display:flex;align-items:center;gap:6px;margin-bottom:4px;}
+      #${MODAL} .ht-rpt-chart-title{font-size:.6rem;font-weight:600;opacity:.8;}
+      #${MODAL} .ht-rpt-chart-dev{font-size:.52rem;opacity:.5;margin-left:6px;font-weight:400;}
+      #${MODAL} .ht-rpt-list-hint{font-size:.5rem;opacity:.45;padding:2px 4px 4px;color:rgba(255,255,255,.7);}
+      #${MODAL} .ht-rpt-chart-reset{font-size:.48rem;padding:2px 8px;border-radius:4px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.6);cursor:pointer;margin-left:auto;}
+      #${MODAL} .ht-rpt-chart{position:relative;height:80px;margin:4px 0;padding:4px 0;}
+      #${MODAL} .ht-rpt-chart svg{width:100%;height:100%;}
+      #${MODAL} .ht-rpt-chart .ht-rpt-line{fill:none;stroke:#4ade80;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;}
+      #${MODAL} .ht-rpt-chart .ht-rpt-area{fill:url(#ht_rpt_grad);opacity:.3;}
+      #${MODAL} .ht-rpt-chart .ht-rpt-hot{fill:transparent;cursor:pointer;pointer-events:all;}
+      #${MODAL} .ht-rpt-chart-labels{position:relative;height:12px;margin-top:2px;}
+      #${MODAL} .ht-rpt-chart-labels span{position:absolute;transform:translateX(-50%);font-size:.38rem;opacity:.35;white-space:nowrap;}
+      #${MODAL} .ht-rpt-chart-labels span:first-child{transform:translateX(0);}
+      #${MODAL} .ht-rpt-chart-labels span:last-child{transform:translateX(-100%);}
+      #${MODAL} .ht-rpt-bubble{position:absolute;top:2px;background:rgba(0,0,0,.85);color:#fff;font-size:.44rem;padding:2px 8px;border-radius:4px;white-space:nowrap;pointer-events:none;z-index:5;}
+      #${MODAL} .ht-rpt-tabs{display:flex;gap:4px;margin:8px 0;overflow-x:auto;}
+      #${MODAL} .ht-rpt-tab{padding:3px 10px;font-size:.54rem;border-radius:6px;border:1px solid rgba(255,255,255,.1);background:transparent;color:rgba(255,255,255,.6);cursor:pointer;white-space:nowrap;flex-shrink:0;}
+      #${MODAL} .ht-rpt-tab.ht-rpt-on{background:rgba(74,222,128,.15);border-color:rgba(74,222,128,.4);color:#86efac;}
+      #${MODAL} .ht-rpt-tag{font-size:.42rem;padding:1px 5px;border-radius:3px;white-space:nowrap;margin-left:4px;display:inline-block;}
+      #${MODAL} .ht-rpt-tag-freq{background:rgba(99,102,241,.2);color:#a5b4fc;}
+      #${MODAL} .ht-rpt-tag-rare{background:rgba(156,163,175,.15);color:#9ca3af;}
+      #${MODAL} .ht-rpt-tag-up{background:rgba(103,232,249,.15);color:#67e8f9;}
+      #${MODAL} .ht-rpt-tag-down{background:rgba(34,197,94,.15);color:#86efac;}
+      #${MODAL} .ht-rpt-tag-heavy{background:rgba(251,191,36,.15);color:#fde047;}
+      #${MODAL} .ht-rpt-rand-day{margin-bottom:2px;}
+      #${MODAL} .ht-rpt-rand-day summary{font-size:.58rem;opacity:.85;cursor:pointer;padding:4px 0;list-style:none;}
+      #${MODAL} .ht-rpt-rand-day summary::-webkit-details-marker{display:none;}
+      #${MODAL} .ht-rpt-rand-day summary::before{content:'';display:inline-block;width:0;height:0;border-left:4px solid currentColor;border-top:3px solid transparent;border-bottom:3px solid transparent;margin-right:6px;vertical-align:middle;transition:transform .15s;}
+      #${MODAL} .ht-rpt-rand-day[open] summary::before{transform:rotate(90deg);}
+      #${MODAL} .ht-rpt-rand-list{padding-left:10px;padding-bottom:4px;}
+      #${MODAL} .ht-rpt-row-flex.ht-rpt-rand-row{cursor:default;background:transparent !important;}
+      #${MODAL} .ht-rpt-row-flex{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;transition:background .15s;border-radius:6px;}
+      #${MODAL} .ht-rpt-row-flex:last-child{border-bottom:none;}
+      #${MODAL} .ht-rpt-row-flex:hover{background:rgba(255,255,255,.03);}
+      #${MODAL} .ht-rpt-row-flex.ht-rpt-on{background:linear-gradient(90deg,rgba(74,222,128,.13),rgba(74,222,128,.02));box-shadow:inset 3px 0 0 #4ade80;}
+      #${MODAL} .ht-summary-item.ht-rpt-on{background:rgba(74,222,128,.08);border-radius:8px;box-shadow:inset 0 -2px 0 #4ade80;}
+      #${MODAL} .ht-rpt-row-idx{opacity:.4;font-size:.54rem;min-width:10px;text-align:right;}
+      #${MODAL} .ht-rpt-row-info{flex:1;min-width:0;max-width:62%;}
+      #${MODAL} .ht-rpt-row-name{font-weight:600;font-size:.62rem;display:flex;align-items:center;flex-wrap:wrap;gap:2px;}
+      #${MODAL} .ht-rpt-row-meta{font-size:.5rem;opacity:.4;margin-top:1px;line-height:1.3;}
+      #${MODAL} .ht-rpt-row-bytes{font-weight:600;white-space:nowrap;font-size:.6rem;font-variant-numeric:tabular-nums;flex-shrink:0;}
+      #${MODAL} .ht-rpt-row-uldl{font-size:.44rem;opacity:.7;font-weight:400;white-space:nowrap;margin-top:1px;}
+      @media(max-width:380px){#${MODAL} .ht-rpt-chart{height:60px;} #${MODAL} .ht-rpt-date{font-size:.5rem;padding:2px 4px;}}
+      #${MODAL} .ht-newdot{position:relative;}
+      #${MODAL} .ht-newdot::after{content:'';position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:#ef4444;pointer-events:none;}
+    `;
+    };
+
+    // ─── render ───────────────────────────────────────────────────────────────
+    const renderDeviceRow = (device, index) => {
+        const displayName = resolveDisplayName(device);
+        const txBytes = device.txBytes || 0;
+        const rxBytes = device.rxBytes || 0;
+        const totalBytes = txBytes + rxBytes;
+        const safeMac = esc(device.mac || '');
+        const online = device.online;
+        const dotCls = online ? 'ht-dot-green' : 'ht-dot-gray';
+        const isMe = device.ip && device.ip === state._clientIp;
+        const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
+        const pol = state.policyMap[device.mac];
+        const polBg = pol?.type === 'blacklist' ? '#f87171' : '';
+        const polDot = `<span data-ht="pol" style="display:${pol ? 'inline-block' : 'none'};width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;opacity:.7${polBg ? ';background:' + polBg : ''}"></span>`;
+        return `<tr data-mac="${safeMac}">
+        <td style="opacity:.4;font-size:.54rem;width:10px;text-align:center;" data-ht="idx">${index + 1}</td>
+        <td><button class="ht-edit-mini${newCls('edit_device')}" data-edit-mac="${safeMac}" data-newkey="edit_device" title="自定义名称">✎</button></td>
+        <td>
+          <div class="ht-td-name">
+            <span class="ht-dot ${dotCls}" data-ht="dot"></span>
+            ${polDot}<span data-ht="name">${esc(displayName)}${meTag}</span>
+          </div>
+          <div class="ht-td-meta"><span data-ht="ip">${esc(device.ip || '')}</span> | <span class="ht-mac" data-full-mac="${safeMac}" data-masked="1" title="点击查看完整 MAC">${esc(maskMac(device.mac || ''))}</span></div>
+        </td>
+        <td class="ht-td-num ht-total" data-ht="tf">${renderTrafficRateCell(device, totalBytes, txBytes, rxBytes)}</td>
+      </tr>`;
+    };
+
+    const showDeviceModal = async (mac, displayName, ip) => {
+        const _r = await run(`timeout 1s ${sq(JQ)} -r --arg m ${sq(mac)} '.[$m] // {"type":"normal"}' ${sq(POLICY_FILE)} 2>/dev/null || echo '{"type":"normal"}'`);
+        let curPolicy = {type: 'normal'};
+        try { curPolicy = JSON.parse((_r?.content || '').trim()); } catch (e) { console.warn('[HT] parse policy json failed:', e, _r?.content); }
+        const curPol = curPolicy.type || 'normal';
+        const uMac = mac.toUpperCase();
+        const pendingVal = localStorage.getItem(_pnKey(uMac));
+        const customName = (pendingVal !== null) ? (pendingVal || '') : (state.dataCache?.devices?.[mac]?.customName || '').trim();
+        const masked = maskMac(mac);
+        const content = `
+      <div style="font-size:.72rem;color:#94a3b8;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <b style="color:#e2e8f0">${esc(displayName || '未知设备')}</b>
+        <span>${esc(ip || '')}</span>
+        <span class="ht-mac-toggle" style="cursor:pointer;color:#64748b;border-bottom:1px dashed #475569" data-masked="${esc(masked)}" data-full="${esc(mac)}">${esc(masked)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <input type="text" id="ht_dev_name" value="${esc(customName)}" placeholder="${esc(displayName)}" style="flex:1;padding:6px 10px;background:#1e2030;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:.7rem;outline:none">
+        <button id="ht_dev_name_clear" style="padding:5px 10px;font-size:.62rem;border:1px solid #334155;border-radius:5px;background:transparent;color:#94a3b8;cursor:pointer">清除</button>
+      </div>
+      ${!customName && (!displayName || displayName === '未知设备') ? '<div style="font-size:.54rem;color:#64748b;line-height:1.4;margin:-4px 0 6px">\u{1F4A1} 设备重新连接WiFi后可自动识别名称，也可在上方手动设置</div>' : ''}
+      <div style="border-top:1px solid #1e293b;margin:10px 0"></div>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:.7rem;color:#e2e8f0">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="normal" ${curPol==='normal'?'checked':''} style="accent-color:#667eea"> 正常（无限制）</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="blacklist" ${curPol==='blacklist'?'checked':''} style="accent-color:#667eea"> 拉黑（禁止联网）</label>
+      </div>`;
+        const { id, el } = createModal({
+            name: 'ht_device_modal',
+            title: '热点流量监控 · 设备管理',
+            content,
+            showConfirm: true,
+            confirmBtnText: '应用',
+            onClose: () => true,
+            onConfirm: async () => {
+                const newName = el.querySelector('#ht_dev_name')?.value?.trim() || '';
+                const type = el.querySelector('input[name="pol"]:checked')?.value;
+                let policyOk = true;
+                if (type === 'normal') {
+                    const r = await policyRemove(mac);
+                    if (!r?.success) policyOk = false;
+                } else if (type) {
+                    const r = await policySet(mac, type);
+                    if (!r?.success) policyOk = false;
+                }
+                if (!policyOk) {
+                    createToast('策略保存失败，请稍后重试', 'red', 3000);
+                    return false;
+                }
+                await loadPolicyMap();
+                setCustomName(mac, newName);
+                patchDataArea();
+                return true;
+            }
+        });
+        const macEl = el.querySelector('.ht-mac-toggle');
+        if (macEl) macEl.onclick = () => { macEl.textContent = macEl.textContent === macEl.dataset.full ? macEl.dataset.masked : macEl.dataset.full; };
+        el.querySelector('#ht_dev_name_clear')?.addEventListener('click', () => { el.querySelector('#ht_dev_name').value = ''; });
+        showModal(id);
+    };
+
+   const renderUlDl = (tx, rx) => `<div style="font-size:.48rem;opacity:.7;white-space:nowrap"><span class="ht-up">↑${esc(htFormatBytes(tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(rx))}</span></div>`;
+
+    const reportDevLabel = (devKey) => {
+        const rs = state._reportState;
+        if (!devKey || !rs || !rs.report) return '';
+        const nm = rs.report.named.find(d => d.name === devKey);
+        if (nm) return nm.name;
+        const st = rs.report.stable.find(d => d.mac === devKey);
+        if (st) return st.hostname || maskMac(devKey);
+        return devKey.includes(':') ? maskMac(devKey) : devKey;
+    };
+
+    const buildChartLabels = (chartData, svgW, containerWidth) => {
+        const n = chartData.length;
+        if (!n) return '';
+        const minPx = 34;
+        let maxLabels = containerWidth ? Math.max(2, Math.floor(containerWidth / minPx)) : 6;
+        if (maxLabels > n) maxLabels = n;
+        let idxs;
+        if (n <= maxLabels) {
+            idxs = chartData.map((_, i) => i);
+        } else {
+            idxs = [];
+            const step = (n - 1) / (maxLabels - 1);
+            for (let k = 0; k < maxLabels; k++) idxs.push(Math.round(k * step));
+            idxs = [...new Set(idxs)];
+        }
+        return idxs.map(i => {
+            const x = n > 1 ? (i / (n - 1)) * svgW : svgW / 2;
+            return `<span style="left:${x}%">${chartData[i].date.slice(5).replace('-', '.')}</span>`;
+        }).join('');
+    };
+
+    const refreshChartLabels = () => {
+        const rs = state._reportState;
+        const labelsEl = document.querySelector(`#${MODAL} .ht-rpt-chart-labels`);
+        const chartEl = document.querySelector(`#${MODAL} .ht-rpt-chart`);
+        if (!rs || !rs.report || !labelsEl || !chartEl) return;
+        labelsEl.innerHTML = buildChartLabels(rs.report.dailyTotals, 100, chartEl.clientWidth || 0);
+    };
+
+    const _renderRandDevs = (day, macHostnames) => {
+        const displayDevs = day.devices.slice(0, 20);
+        const overflowCount = day.devices.length - 20;
+        const overflowBytes = overflowCount > 0 ? day.devices.slice(20).reduce((s, d) => s + d.bytes, 0) : 0;
+        return displayDevs.map(d => `<div class="ht-rpt-row-flex ht-rpt-rand-row">
+                <button class="ht-edit-mini" data-rpt-edit="${esc(d.mac)}" data-rpt-edit-type="random">✎</button>
+                <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(d.hostname || macHostnames[d.mac.toUpperCase()] || '未知设备')}</div>
+                  <div class="ht-rpt-row-meta"><span class="ht-rpt-mac-tog" data-macfull="${esc(d.mac)}" data-macmasked="${esc(maskMac(d.mac))}" style="cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);">${esc(maskMac(d.mac))}</span></div></div>
+                <span class="ht-rpt-row-bytes">${esc(htFormatBytes(d.bytes))}<div class="ht-rpt-row-uldl"><span class="ht-up">↑${esc(htFormatBytes(d.tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(d.rx))}</span></div></span>
+              </div>`).join('') + (overflowCount > 0 ? `<div class="ht-rpt-row-flex ht-rpt-rand-row" style="opacity:.6;justify-content:center;font-size:.54rem;">其他 ${overflowCount} 台 · ${esc(htFormatBytes(overflowBytes))}</div>` : '');
+    };
+
+    const renderReportArea = () => {
+        const rs = state._reportState;
+        if (!rs || !rs.report) {
+            return `<div class="ht-card"><div class="ht-empty" style="padding:20px"><span style="display:inline-block;animation:ht_spin 1s linear infinite">⏳</span> 正在汇总数据...</div></div>`;
+        }
+        const rpt = rs.report;
+        const s = rpt.summary;
+        const chartDevName = rs.chartDev || '';
+
+        const headerSummaryHtml = `<div class="ht-card">
+          <div class="ht-rpt-header" style="margin-bottom:8px;">
+            <b class="ht-rpt-title">用量报告</b>
+            <input type="date" id="ht_rpt_start" class="ht-rpt-date" value="${esc(rs.startDate)}">
+            <span class="ht-rpt-sep">~</span>
+            <input type="date" id="ht_rpt_end" class="ht-rpt-date" value="${esc(rs.endDate)}">
+            <button id="ht_rpt_back" class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:2px 8px;margin-left:auto;">返回</button>
+          </div>
+          <div class="ht-summary-grid">
+            <div class="ht-summary-item${rs.chartMode === DEFAULT_CHART_MODE ? ' ht-rpt-on' : ''}" data-chart-mode="${MODE_SYS}" style="cursor:pointer;"><div class="ht-summary-val">${esc(htFormatBytes(s.sysTotal))} <span style="font-size:.48rem;opacity:.7">日均:${esc(htFormatBytes(s.days > 0 ? Math.round(s.sysTotal / s.days) : 0))}</span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap;"><span class="ht-up">↑${esc(htFormatBytes(s.sysTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(s.sysRx))}</span></div><div class="ht-summary-lbl">系统增量</div></div>
+            <div class="ht-summary-item${rs.chartMode === MODE_IPT ? ' ht-rpt-on' : ''}" data-chart-mode="${MODE_IPT}" style="cursor:pointer;"><div class="ht-summary-val">${esc(htFormatBytes(s.iptTotal))} <span style="font-size:.48rem;opacity:.7">日均:${esc(htFormatBytes(s.days > 0 ? Math.round(s.iptTotal / s.days) : 0))}</span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap;">v4:<span class="ht-up">${esc(htFormatBytes(s.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(s.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div></div>
+            <div class="ht-summary-item"><div class="ht-summary-val">已知 ${s.knownCount} / 总 ${s.totalCount}</div><div class="ht-summary-lbl">接入设备</div></div>
+            <div class="ht-summary-item${rs.chartMode === MODE_DEV && !rs.chartDev ? ' ht-rpt-on' : ''}" data-chart-mode="${MODE_DEV}" style="cursor:pointer;"><div class="ht-summary-val">${esc(htFormatBytes(s.devTotal))} <span style="font-size:.48rem;opacity:.7">日均:${esc(htFormatBytes(s.days > 0 ? Math.round(s.devTotal / s.days) : 0))}</span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap;"><span class="ht-up">↑${esc(htFormatBytes(s.devTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(s.devRx))}</span></div><div class="ht-summary-lbl">设备合计</div></div>
+          </div>
+        </div>`;
+
+        const _chartMode = rs.chartDev ? MODE_DEV : (rs.chartMode || DEFAULT_CHART_MODE);
+        const chartData = rpt.dailyTotals;
+        const maxDt = Math.max(...chartData.map(d => d[_chartMode] || 0), 1);
+        const svgW = 100;
+        const svgH = 60;
+        const points = chartData.map((d, i) => {
+            const x = chartData.length > 1 ? (i / (chartData.length - 1)) * svgW : svgW / 2;
+            const y = svgH - ((d[_chartMode] || 0) / maxDt) * (svgH - 8) - 4;
+            return { x, y, date: d.date, bytes: d[_chartMode] || 0 };
+        });
+        const polyline = points.map(p => `${p.x},${p.y}`).join(' ');
+        const areaPath = points.length > 1 ? `M${points[0].x},${svgH} ${points.map(p => `L${p.x},${p.y}`).join(' ')} L${points[points.length - 1].x},${svgH} Z` : '';
+        const hotW = points.length > 1 ? svgW / points.length : svgW;
+        const hotsHtml = points.map((p, i) => {
+            const hx = points.length > 1 ? Math.max(0, p.x - hotW / 2) : 0;
+            return `<rect class="ht-rpt-hot" x="${hx}" y="0" width="${hotW}" height="${svgH}" data-date="${esc(p.date)}" data-bytes="${p.bytes}" data-cx="${p.x}"/>`;
+        }).join('');
+        const labelsHtml = buildChartLabels(chartData, svgW);
+        const chartHtml = `<div class="ht-card ht-rpt-section">
+          <div class="ht-rpt-chart-hd">
+            <span class="ht-rpt-chart-title">每日流量趋势${chartDevName ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(chartDevName))})</span>` : `<span class="ht-rpt-chart-dev">(${CHART_MODE_LABEL[_chartMode]})</span>`}</span>
+            ${chartDevName ? `<button id="ht_rpt_chart_reset" class="ht-rpt-chart-reset">× 返回全部</button>` : ''}
+          </div>
+          <div class="ht-rpt-chart" id="ht_rpt_chart">
+            <svg viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none">
+              <defs><linearGradient id="ht_rpt_grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4ade80" stop-opacity="0.4"/><stop offset="100%" stop-color="#4ade80" stop-opacity="0"/></linearGradient></defs>
+              ${areaPath ? `<path class="ht-rpt-area" d="${areaPath}"/>` : ''}
+              <polyline class="ht-rpt-line" points="${polyline}"/>
+              ${hotsHtml}
+            </svg>
+          </div>
+          <div class="ht-rpt-chart-labels">${labelsHtml}</div>
+        </div>`;
+
+        const activeTab = rs._activeTab || 'known';
+        const knownCount = rpt.named.length + rpt.stable.length;
+        const randMacCount = new Set(rpt.random.flatMap(d => d.devices.map(dd => dd.mac))).size;
+        const tabHtml = `<div class="ht-rpt-tabs">
+          <button class="ht-rpt-tab${activeTab === 'known' ? ' ht-rpt-on' : ''}" data-rpt-tab="known">已知设备 (${knownCount})</button>
+          <button class="ht-rpt-tab${activeTab === 'random' ? ' ht-rpt-on' : ''}" data-rpt-tab="random">随机MAC (${randMacCount})</button>
+        </div>`;
+
+        const knownList = [
+          ...rpt.named.map(d => Object.assign({ _rtype: 'named' }, d)),
+          ...rpt.stable.map(d => Object.assign({ _rtype: 'stable' }, d))
+        ].sort((a, b) => (b.totalTx + b.totalRx) - (a.totalTx + a.totalRx));
+        const knownListHtml = knownList.map((dev, i) => {
+            const total = dev.totalTx + dev.totalRx;
+            const tags = computeTags(dev, s.totalDeviceBytes, s.days);
+            const tagsHtml = tags.map(t => `<span class="ht-rpt-tag ${t.cls}">${t.text}</span>`).join('');
+            const activeDays = dev.activeDates.size;
+            const pct = s.totalDeviceBytes > 0 ? Math.round(total / s.totalDeviceBytes * 100) : 0;
+            const uldl = `<div class="ht-rpt-row-uldl"><span class="ht-up">↑${esc(htFormatBytes(dev.totalTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(dev.totalRx))}</span></div>`;
+            if (dev._rtype === 'named') {
+                const macCount = dev.macs.size;
+                const isActive = rs.chartDev === dev.name;
+                return `<div class="ht-rpt-row-flex ht-rpt-row${isActive ? ' ht-rpt-on' : ''}" data-rpt-dev="${esc(dev.name)}" data-rpt-type="named">
+                  <span class="ht-rpt-row-idx">${i + 1}</span>
+                  <button class="ht-edit-mini" data-rpt-edit="${esc(dev.name)}" data-rpt-edit-type="named">✎</button>
+                  <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(dev.name)} <span style="font-size:.48rem;opacity:.5">[${macCount}个MAC]</span>${tagsHtml}</div>
+                    <div class="ht-rpt-row-meta">活跃 ${activeDays}/${s.days}天 · 日均 ${esc(htFormatBytes(activeDays > 0 ? Math.round(total / activeDays) : 0))} · 占比 ${pct}%</div></div>
+                  <span class="ht-rpt-row-bytes">${esc(htFormatBytes(total))}${uldl}</span>
+                </div>`;
+            }
+            const isActive = rs.chartDev === dev.mac;
+            return `<div class="ht-rpt-row-flex ht-rpt-row${isActive ? ' ht-rpt-on' : ''}" data-rpt-dev="${esc(dev.mac)}" data-rpt-type="stable">
+              <span class="ht-rpt-row-idx">${i + 1}</span>
+              <button class="ht-edit-mini" data-rpt-edit="${esc(dev.mac)}" data-rpt-edit-type="stable">✎</button>
+              <div class="ht-rpt-row-info"><div class="ht-rpt-row-name">${esc(dev.hostname || '未知设备')}${tagsHtml}</div>
+                <div class="ht-rpt-row-meta">${esc(maskMac(dev.mac))} · 活跃 ${activeDays}/${s.days}天 · 日均 ${esc(htFormatBytes(activeDays > 0 ? Math.round(total / activeDays) : 0))} · 占比 ${pct}%</div></div>
+              <span class="ht-rpt-row-bytes">${esc(htFormatBytes(total))}${uldl}</span>
+            </div>`;
+        }).join('');
+
+        const randTotal = rpt.random.reduce((s, d) => s + d.devices.reduce((ss, dd) => ss + dd.bytes, 0), 0);
+        const randCount = new Set(rpt.random.flatMap(d => d.devices.map(dd => dd.mac))).size;
+        let randomListHtml = `<div style="font-size:.56rem;opacity:.75;margin-bottom:6px;">本周期共 ${randCount} 台随机MAC设备，合计 ${esc(htFormatBytes(randTotal))}${randCount > 0 ? '（命名后归入已知设备，或在设备端关闭随机MAC）' : ''}</div>`;
+        rpt.random.forEach((day, idx) => {
+            const dayTotal = day.devices.reduce((s, d) => s + d.bytes, 0);
+            const dayTx = day.devices.reduce((s, d) => s + (d.tx || 0), 0);
+            const dayRx = day.devices.reduce((s, d) => s + (d.rx || 0), 0);
+            const dateLabel = day.date.slice(5).replace('-', '月') + '日';
+            const isFirst = idx === 0;
+            randomListHtml += `<details class="ht-rpt-rand-day"${isFirst ? ' open' : ''}>
+              <summary>${dateLabel} · ${day.devices.length}台 · ${esc(htFormatBytes(dayTotal))} <span style="font-size:.48rem;opacity:.7;font-weight:400;"><span class="ht-up">↑${esc(htFormatBytes(dayTx))}</span> <span class="ht-down">↓${esc(htFormatBytes(dayRx))}</span></span></summary>
+              <div class="ht-rpt-rand-list"${!isFirst ? ` data-lazy-idx="${idx}"` : ''}>${isFirst ? _renderRandDevs(day, rpt.macHostnames) : ''}</div>
+            </details>`;
+        });
+
+        const devicesHtml = `<div class="ht-card ht-rpt-section">
+          ${tabHtml}
+          <div id="ht_rpt_known" style="${activeTab !== 'known' ? 'display:none' : ''}">${knownListHtml ? `<div class="ht-rpt-list-hint" style="${rs.chartDev ? 'display:none' : ''}">点击设备行查看用量趋势</div>` : ''}${knownListHtml || '<div class="ht-empty">暂无已知设备</div>'}</div>
+          <div id="ht_rpt_random" style="${activeTab !== 'random' ? 'display:none' : ''}">${randomListHtml || '<div class="ht-empty">暂无随机MAC设备</div>'}</div>
+        </div>`;
+
+        return `${headerSummaryHtml}${chartHtml}${devicesHtml}`;
+    };
+
+    const showUsageReport = async () => {
+        setAutoData(false);
+        state._viewMode = 'report';
+        const today = new Date().toISOString().slice(0, 10);
+        const now = new Date();
+        const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        state._reportState = { startDate: start, endDate: today, raw: null, nameMap: null, report: null, chartDev: null, chartMode: DEFAULT_CHART_MODE, _activeTab: 'known' };
+        const area = document.querySelector(`#${MODAL} #ht_data_area`);
+        if (area) area.innerHTML = renderReportArea();
+        initReportDelegate();
+        refreshChartLabels();
+        await loadAndRenderReport();
+    };
+
+    const loadAndRenderReport = async () => {
+        const rs = state._reportState;
+        if (!rs) return;
+        const area = document.querySelector(`#${MODAL} #ht_data_area`);
+        if (!area) return;
+        area.innerHTML = renderReportArea();
+        try {
+            const nameMap = rs.nameMap || await loadNameMap();
+            const dataResult = await loadReportData(rs.startDate, rs.endDate);
+            const rawContent = (dataResult?.content || '').trim();
+            if (rawContent && rawContent[0] !== '{' && rawContent[0] !== '[') {
+                throw new Error('数据获取异常，请稍后重试');
+            }
+            const raw = JSON.parse(rawContent || '{"days":[]}');
+            if (!raw.days) raw.days = [];
+            const today = new Date().toISOString().slice(0, 10);
+            if (rs.startDate <= today && today <= rs.endDate) {
+                if (!state.dataCache) { try { await loadData(); } catch (e) {} }
+                const dc = state.dataCache;
+                if (dc && dc.devices && !raw.days.find(d => d.date === today)) {
+                    raw.days.push({
+                        date: dc.date || today,
+                        devices: Object.values(dc.devices).map(d => ({
+                            m: d.mac,
+                            h: d.hostname || '',
+                            c: d.customName || '',
+                            tx: d.txBytes || 0,
+                            rx: d.rxBytes || 0
+                        })),
+                        sd: dc.summary?.sysDeltaBytes || 0,
+                        sdTx: dc.summary?.sysDeltaTxBytes || 0,
+                        sdRx: dc.summary?.sysDeltaRxBytes || 0,
+                        it: dc.summary?.iptTotalBytes || 0,
+                        itV4: dc.summary?.iptTotalV4Bytes || 0,
+                        itV6: dc.summary?.iptTotalV6Bytes || 0,
+                        dt: dc.summary?.deviceTotalBytes || 0
+                    });
+                }
+            }
+            if (!raw.days.length) {
+                rs.raw = []; rs.nameMap = nameMap; rs.report = aggregateReport([], nameMap, rs.startDate, rs.endDate);
+                area.innerHTML = renderReportArea();
+                initReportDelegate();
+                refreshChartLabels();
+                return;
+            }
+            rs.raw = raw.days;
+            rs.nameMap = nameMap;
+            rs.report = aggregateReport(raw.days, nameMap, rs.startDate, rs.endDate);
+            rs.chartDev = null;
+            area.innerHTML = renderReportArea();
+            initReportDelegate();
+            refreshChartLabels();
+        } catch (e) {
+            _reportDataCache.key = null;
+            const msg = (e instanceof SyntaxError) ? '数据获取异常，请稍后重试' : (e?.message || '未知错误');
+            area.innerHTML = `<div class="ht-card"><div class="ht-empty" style="padding:20px">数据加载失败：${esc(msg)}<br><button id="ht_rpt_retry" class="ht-btn" style="margin-top:8px;font-size:.58rem;">重试</button></div></div>`;
+            const retryBtn = area.querySelector('#ht_rpt_retry');
+            if (retryBtn) retryBtn.onclick = () => loadAndRenderReport();
+        }
+    };
+
+    const updateReportChart = (devKey) => {
+        const rs = state._reportState;
+        if (!rs || !rs.report) return;
+        rs.chartDev = devKey;
+        const chartEl = document.querySelector(`#${MODAL} #ht_rpt_chart`);
+        const hdEl = document.querySelector(`#${MODAL} .ht-rpt-chart-hd`);
+        if (!chartEl) return;
+
+        let dailyData;
+        if (!devKey) {
+            const _m = rs.chartMode || DEFAULT_CHART_MODE;
+            dailyData = rs.report.dailyTotals.map(d => d[_m] || 0);
+        } else {
+            const named = rs.report.named.find(d => d.name === devKey);
+            const stable = rs.report.stable.find(d => d.mac === devKey);
+            const dev = named || stable;
+            if (!dev) { rs.chartDev = null; return; }
+            dailyData = rs.report.dailyTotals.map(d => {
+                const dayDevs = rs.raw.find(rd => rd.date === d.date);
+                if (!dayDevs) return 0;
+                if (named) {
+                    return dayDevs.devices.filter(dd => rs.nameMap[dd.m.toUpperCase()] === devKey).reduce((s, dd) => s + (dd.tx || 0) + (dd.rx || 0), 0);
+                } else {
+                    const dd = dayDevs.devices.find(dd => dd.m === devKey);
+                    return dd ? (dd.tx || 0) + (dd.rx || 0) : 0;
+                }
+            });
+        }
+
+        const maxVal = Math.max(...dailyData, 1);
+        const svgW = 100;
+        const svgH = 60;
+        const points = dailyData.map((val, i) => {
+            const x = dailyData.length > 1 ? (i / (dailyData.length - 1)) * svgW : svgW / 2;
+            const y = svgH - (val / maxVal) * (svgH - 8) - 4;
+            return { x, y };
+        });
+        const polyline = points.map(p => `${p.x},${p.y}`).join(' ');
+        const areaPath = points.length > 1 ? `M${points[0].x},${svgH} ${points.map(p => `L${p.x},${p.y}`).join(' ')} L${points[points.length - 1].x},${svgH} Z` : '';
+        const hotW = points.length > 1 ? svgW / points.length : svgW;
+        const hotsHtml = points.map((p, i) => {
+            const hx = points.length > 1 ? Math.max(0, p.x - hotW / 2) : 0;
+            return `<rect class="ht-rpt-hot" x="${hx}" y="0" width="${hotW}" height="${svgH}" data-date="${esc(rs.report.dailyTotals[i].date)}" data-bytes="${dailyData[i]}" data-cx="${p.x}"/>`;
+        }).join('');
+
+        const svg = chartEl.querySelector('svg');
+        if (svg) {
+            const lineEl = svg.querySelector('.ht-rpt-line');
+            const areaEl = svg.querySelector('.ht-rpt-area');
+            if (lineEl) lineEl.setAttribute('points', polyline);
+            if (areaEl) { areaEl.setAttribute('d', areaPath); } else if (areaPath) { const p = document.createElementNS('http://www.w3.org/2000/svg','path'); p.setAttribute('class','ht-rpt-area'); p.setAttribute('d', areaPath); svg.insertBefore(p, lineEl); }
+            svg.querySelectorAll('.ht-rpt-hot').forEach(d => d.remove());
+            const tmp = document.createElementNS('http://www.w3.org/2000/svg','g');
+            tmp.innerHTML = hotsHtml;
+            while (tmp.firstChild) svg.appendChild(tmp.firstChild);
+        }
+
+        if (hdEl) {
+            const devLabel = devKey ? `<span class="ht-rpt-chart-dev">(${esc(reportDevLabel(devKey))})</span>` : `<span class="ht-rpt-chart-dev">(${CHART_MODE_LABEL[rs.chartMode || DEFAULT_CHART_MODE]})</span>`;
+            const resetBtn = devKey ? `<button id="ht_rpt_chart_reset" class="ht-rpt-chart-reset">× 返回全部</button>` : '';
+            hdEl.innerHTML = `<span class="ht-rpt-chart-title">每日流量趋势${devLabel}</span>${resetBtn}`;
+        }
+
+        const _area = chartEl?.closest('#ht_data_area') || document.querySelector(`#${MODAL} #ht_data_area`);
+        if (_area) {
+            _area.querySelectorAll('.ht-rpt-row').forEach(row => { row.classList.toggle('ht-rpt-on', row.dataset.rptDev === devKey); });
+            const listHint = _area.querySelector('.ht-rpt-list-hint');
+            if (listHint) listHint.style.display = devKey ? 'none' : '';
+            _area.querySelectorAll('[data-chart-mode]').forEach(el => el.classList.toggle('ht-rpt-on', !devKey && el.dataset.chartMode === (rs.chartMode || DEFAULT_CHART_MODE)));
+        }
+        refreshChartLabels();
+    };
+
+    const showReportEditDialog = (editType, editKey) => {
+        const rs = state._reportState;
+        if (!rs || !rs.report || !rs.nameMap) return;
+
+        if (editType === 'named') {
+            const dev = rs.report.named.find(d => d.name === editKey);
+            if (!dev) return;
+            const macList = [...dev.macs];
+            const { el, close } = createFixedToast('ht_rpt_edit', `<div style="pointer-events:all;width:88vw;max-width:340px">
+              <div class="title" style="margin:0 0 8px">修改设备名称</div>
+              <div style="margin-bottom:8px"><input id="ht_rpt_edit_name" type="text" value="${esc(editKey)}" style="width:100%;padding:6px 10px;background:#1e2030;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:.68rem;outline:none"></div>
+              <div style="font-size:.54rem;opacity:.5;margin-bottom:4px;">自定义名称相同的设备已合并统计，关联的MAC地址 (${macList.length}个):</div>
+              <div id="ht_rpt_edit_macs">${macList.map(mac => { const _hn = rs.report.macHostnames[mac.toUpperCase()] || ''; return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;font-size:.6rem;gap:8px;border-bottom:1px solid rgba(255,255,255,.06);"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_hn ? esc(_hn) + ' · ' : ''}<span class="ht-rpt-mac-tog" data-macfull="${esc(mac)}" data-macmasked="${esc(maskMac(mac))}" style="opacity:.55;cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);" title="点击查看/隐藏完整MAC">${esc(maskMac(mac))}</span></span><button class="ht-btn ht-btn-ghost" style="font-size:.56rem;padding:3px 10px;flex-shrink:0;" data-rpt-remove-mac="${esc(mac)}">移除</button></div>`; }).join('')}</div>
+              <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px"><button id="ht_rpt_edit_ok" class="ht-btn" style="font-size:.6rem;padding:4px 12px;">确认</button><button id="ht_rpt_edit_cancel" class="ht-btn ht-btn-ghost" style="font-size:.6rem;padding:4px 12px;">取消</button></div>
+            </div>`);
+            let removedMacs = [];
+            el.querySelector('#ht_rpt_edit_cancel').onclick = () => close();
+            el.addEventListener('click', (e) => {
+                const tog = e.target.closest('.ht-rpt-mac-tog');
+                if (tog) {
+                    toggleMacMask(tog);
+                    return;
+                }
+                const removeBtn = e.target.closest('[data-rpt-remove-mac]');
+                if (removeBtn) {
+                    const mac = removeBtn.dataset.rptRemoveMac;
+                    removedMacs.push(mac);
+                    removeBtn.closest('div').remove();
+                }
+            });
+            el.querySelector('#ht_rpt_edit_ok').onclick = async () => {
+                const newName = (el.querySelector('#ht_rpt_edit_name')?.value || '').trim();
+                const nameMap = { ...rs.nameMap };
+                removedMacs.forEach(mac => { delete nameMap[mac.toUpperCase()]; });
+                const remainingMacs = macList.filter(m => !removedMacs.includes(m));
+                if (!newName) {
+                    remainingMacs.forEach(mac => { delete nameMap[mac.toUpperCase()]; });
+                } else {
+                    const existingWithName = Object.entries(nameMap).filter(([k, v]) => v === newName && !remainingMacs.includes(k));
+                    if (existingWithName.length > 0 && newName !== editKey) {
+                        if (!confirm(`已存在同名设备（${existingWithName.length}个MAC），确认后将合并`)) return;
+                    }
+                    remainingMacs.forEach(mac => { nameMap[mac.toUpperCase()] = newName; });
+                }
+                close();
+                await saveNameMap(nameMap);
+                rs.nameMap = nameMap;
+                rs.report = aggregateReport(rs.raw, nameMap, rs.startDate, rs.endDate);
+                if (rs.chartDev === editKey && newName !== editKey) rs.chartDev = newName || null;
+                const area = document.querySelector(`#${MODAL} #ht_data_area`);
+                if (area) { area.innerHTML = renderReportArea(); initReportDelegate(); refreshChartLabels(); }
+                if (rs.chartDev) updateReportChart(rs.chartDev);
+                createToast('已保存', 'green', 1500);
+            };
+        } else {
+            const mac = editKey;
+            const stableDev = rs.report.stable.find(d => d.mac === mac);
+            const hostname = stableDev?.hostname || rs.report.macHostnames[mac.toUpperCase()] || '';
+            const { el, close } = createFixedToast('ht_rpt_edit', `<div style="pointer-events:all;width:88vw;max-width:340px">
+              <div class="title" style="margin:0 0 8px">设置设备名称</div>
+              <div style="font-size:.56rem;opacity:.5;margin-bottom:4px;">MAC: <span class="ht-rpt-mac-tog" data-macfull="${esc(mac)}" data-macmasked="${esc(maskMac(mac))}" style="cursor:pointer;border-bottom:1px dashed rgba(255,255,255,.25);" title="点击查看/隐藏完整MAC">${esc(maskMac(mac))}</span></div>
+              ${hostname ? `<div style="font-size:.56rem;opacity:.5;margin-bottom:6px;">设备名: ${esc(hostname)} (自动识别)</div>` : ''}
+              <div style="margin-bottom:6px"><input id="ht_rpt_edit_name" type="text" placeholder="输入自定义名称" style="width:100%;padding:6px 10px;background:#1e2030;border:1px solid #334155;border-radius:5px;color:#e2e8f0;font-size:.68rem;outline:none"></div>
+              <div style="font-size:.5rem;opacity:.4;line-height:1.4;margin-bottom:8px;">设置名称后，此设备将归入“已知设备”。若输入已有名称，将与同名设备合并。</div>
+              <div style="display:flex;gap:6px;justify-content:flex-end;"><button id="ht_rpt_edit_ok" class="ht-btn" style="font-size:.6rem;padding:4px 12px;">确认</button><button id="ht_rpt_edit_cancel" class="ht-btn ht-btn-ghost" style="font-size:.6rem;padding:4px 12px;">取消</button></div>
+            </div>`);
+            el.querySelector('#ht_rpt_edit_cancel').onclick = () => close();
+            el.addEventListener('click', (e) => {
+                const tog = e.target.closest('.ht-rpt-mac-tog');
+                if (tog) toggleMacMask(tog);
+            });
+            el.querySelector('#ht_rpt_edit_ok').onclick = async () => {
+                const newName = (el.querySelector('#ht_rpt_edit_name')?.value || '').trim();
+                if (!newName) { close(); return; }
+                const nameMap = { ...rs.nameMap };
+                const existingWithName = Object.entries(nameMap).filter(([, v]) => v === newName);
+                if (existingWithName.length > 0) {
+                    if (!confirm(`已存在同名设备（${existingWithName.length}个MAC），确认后将合并`)) return;
+                }
+                nameMap[mac.toUpperCase()] = newName;
+                close();
+                await saveNameMap(nameMap);
+                rs.nameMap = nameMap;
+                rs.report = aggregateReport(rs.raw, nameMap, rs.startDate, rs.endDate);
+                if (rs.chartDev === mac) rs.chartDev = newName;
+                const area = document.querySelector(`#${MODAL} #ht_data_area`);
+                if (area) { area.innerHTML = renderReportArea(); initReportDelegate(); refreshChartLabels(); }
+                if (rs.chartDev) updateReportChart(rs.chartDev);
+                createToast('已保存', 'green', 1500);
+            };
+        }
+    };
+
+    const initReportDelegate = () => {
+        const area = document.querySelector(`#${MODAL} #ht_data_area`);
+        if (!area || area._rptBound) return;
+        area._rptBound = true;
+        let _debounceTimer = null;
+        let _bubbleTimer = null;
+
+        area.addEventListener('click', (e) => {
+            if (e.target.closest('#ht_rpt_back')) {
+                e.stopPropagation();
+                state._viewMode = 'today';
+                state._reportState = null;
+                setAutoData(state.installed);
+                refreshDataArea();
+                return;
+            }
+            const modeItem = e.target.closest('[data-chart-mode]');
+            if (modeItem) {
+                e.stopPropagation();
+                const rs = state._reportState;
+                if (!rs) return;
+                const newMode = modeItem.dataset.chartMode;
+                rs.chartMode = (rs.chartMode === newMode && !rs.chartDev) ? DEFAULT_CHART_MODE : newMode;
+                rs.chartDev = null;
+                updateReportChart(null);
+                area.querySelectorAll('.ht-rpt-row').forEach(row => row.classList.remove('ht-rpt-on'));
+                return;
+            }
+            if (e.target.closest('#ht_rpt_chart_reset')) {
+                e.stopPropagation();
+                const rs = state._reportState;
+                if (rs) rs.chartMode = DEFAULT_CHART_MODE;
+                updateReportChart(null);
+                return;
+            }
+            const tabBtn = e.target.closest('[data-rpt-tab]');
+            if (tabBtn) {
+                e.stopPropagation();
+                const tab = tabBtn.dataset.rptTab;
+                const rs = state._reportState;
+                if (rs) rs._activeTab = tab;
+                area.querySelectorAll('.ht-rpt-tab').forEach(t => t.classList.toggle('ht-rpt-on', t.dataset.rptTab === tab));
+                const panels = { known: '#ht_rpt_known', random: '#ht_rpt_random' };
+                Object.entries(panels).forEach(([k, sel]) => { const el = area.querySelector(sel); if (el) el.style.display = k === tab ? '' : 'none'; });
+                if (rs?.chartDev) updateReportChart(null);
+                return;
+            }
+            const row = e.target.closest('.ht-rpt-row');
+            if (row && !e.target.closest('.ht-edit-mini')) {
+                e.stopPropagation();
+                const devKey = row.dataset.rptDev;
+                const rs = state._reportState;
+                if (rs) {
+                    rs.chartMode = MODE_DEV;
+                    updateReportChart(rs.chartDev === devKey ? null : devKey);
+                }
+                return;
+            }
+            const editBtn = e.target.closest('[data-rpt-edit]');
+            if (editBtn) {
+                e.stopPropagation();
+                showReportEditDialog(editBtn.dataset.rptEditType, editBtn.dataset.rptEdit);
+                return;
+            }
+            const macTog = e.target.closest('.ht-rpt-mac-tog');
+            if (macTog) {
+                toggleMacMask(macTog);
+                return;
+            }
+            const hot = e.target.closest('.ht-rpt-hot');
+            if (hot) {
+                e.stopPropagation();
+                if (_bubbleTimer) clearTimeout(_bubbleTimer);
+                area.querySelectorAll('.ht-rpt-bubble').forEach(b => b.remove());
+                const date = hot.dataset.date;
+                const bytes = parseInt(hot.dataset.bytes) || 0;
+                const cx = parseFloat(hot.dataset.cx || '50');
+                const bubble = document.createElement('div');
+                bubble.className = 'ht-rpt-bubble';
+                bubble.textContent = `${date.slice(5).replace('-', '.')} \u00b7 ${htFormatBytes(bytes)}`;
+                if (cx < 1) {
+                    bubble.style.left = '0';
+                    bubble.style.transform = 'translateX(0)';
+                } else if (cx > 99) {
+                    bubble.style.right = '0';
+                    bubble.style.transform = 'translateX(0)';
+                } else {
+                    bubble.style.left = cx + '%';
+                    bubble.style.transform = 'translateX(-50%)';
+                }
+                const chartWrap = hot.closest('.ht-rpt-chart');
+                if (chartWrap) chartWrap.appendChild(bubble);
+                _bubbleTimer = setTimeout(() => bubble.remove(), 2500);
+                return;
+            }
+        });
+
+        area.addEventListener('toggle', (e) => {
+            const details = e.target;
+            if (!details.classList.contains('ht-rpt-rand-day') || !details.open) return;
+            const lazyEl = details.querySelector('[data-lazy-idx]');
+            if (!lazyEl) return;
+            const idx = parseInt(lazyEl.dataset.lazyIdx);
+            const rs = state._reportState;
+            if (!rs || !rs.report || !rs.report.random[idx]) return;
+            lazyEl.innerHTML = _renderRandDevs(rs.report.random[idx], rs.report.macHostnames);
+            delete lazyEl.dataset.lazyIdx;
+        }, true);
+
+        area.addEventListener('change', (e) => {
+            if (e.target.id === 'ht_rpt_start' || e.target.id === 'ht_rpt_end') {
+                if (_debounceTimer) clearTimeout(_debounceTimer);
+                _debounceTimer = setTimeout(() => {
+                    const rs = state._reportState;
+                    if (!rs) return;
+                    const startInput = area.querySelector('#ht_rpt_start');
+                    const endInput = area.querySelector('#ht_rpt_end');
+                    let startDate = startInput?.value || rs.startDate;
+                    let endDate = endInput?.value || rs.endDate;
+                    const today = new Date().toISOString().slice(0, 10);
+                    const minDate = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+                    if (startDate < minDate) { startDate = minDate; if (startInput) startInput.value = minDate; createToast('最远可回溯60天', '', 2000); }
+                    if (endDate <= startDate) { endDate = today; if (endInput) endInput.value = today; createToast('截止日须大于起始日', '', 2000); }
+                    rs.startDate = startDate;
+                    rs.endDate = endDate;
+                    rs.chartDev = null;
+                    loadAndRenderReport();
+                }, 300);
+            }
+        });
+    };
+
+    const renderDataArea = () => {
+        if (state._viewMode === 'report') return renderReportArea();
+        const installed = state.installed;
+        const devicesMap = (state.dataCache && state.dataCache.devices) ? state.dataCache.devices : {};
+        const deviceList = sortDevices(devicesMap);
+        const summary = state.summary;
+        const dataDate = (state.dataCache && state.dataCache.date) || new Date().toISOString().slice(0, 10);
+
+        let summaryHtml;
+        if (summary) {
+            const m = calcSummaryMetrics(summary, deviceList);
+            const zeroWarn = (summary.zeroStreak >= 3 && installed) ? `<div class="ht-status-alert" style="font-size:.55rem;margin-top:4px;">热点合计持续为0，可能受硬件加速影响，建议点击「诊断」排查</div>` : '';
+            summaryHtml = `<div class="ht-summary-grid">
+${summaryHtmls(m).map((html, i) => `<div class="ht-summary-item" data-ht="si_${i}">${html}</div>`).join('\n')}
+            </div>${zeroWarn}`;
+        } else {
+            summaryHtml = `<div class="ht-empty" style="font-size:.58rem;">${installed ? '已启用，等待首次采集数据' : '启用并等待首次采集后显示'}</div>`;
+        }
+
+        const devicesHtml = deviceList.length > 0
+            ? `<div class="ht-tbl-wrap"><table class="ht-tbl">
+                <thead><tr><th style="width:10px;text-align:center;">#</th><th style="width:20px;">操作</th><th style="width:49%;">设备</th><th class="ht-td-num">Σ 流量 · 网速</th></tr></thead>
+                <tbody>${deviceList.map((d, i) => renderDeviceRow(d, i)).join('')}</tbody>
+               </table></div>`
+            : `<div class="ht-empty">${installed ? '已启用，等待首次采集到接入设备...' : '启用后开始统计各接入设备的流量'}</div>`;
+
+        const updatedShort = state.lastUpdated ? state.lastUpdated.slice(11, 19) : '';
+
+        return `
+        <div class="ht-card">
+          <div class="ht-row" style="justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;">
+            <div class="ht-row"><b>流量概览</b><span class="ht-date">${esc(dataDate)}<span data-ht="sum_date">${installed && updatedShort ? `（更新时间 ${esc(updatedShort)}）` : ''}</span></span></div>
+            <div class="ht-row" style="gap:4px;"><button id="ht_report_btn" data-newkey="report" class="ht-btn ht-btn-ghost${newCls('report')}" style="font-size:.56rem;padding:2px 8px;">用量报告</button><button id="ht_devices_toggle" data-newkey="devices" class="ht-btn ht-btn-ghost${newCls('devices')}" style="font-size:.56rem;padding:2px 8px;">${localStorage.getItem(LS_DEVICES_COLLAPSED) === '1' ? '设备明细 ▼' : '设备明细 ▲'}</button></div>
+          </div>
+          ${summaryHtml}
+        </div>
+        <div class="ht-card" id="ht_devices_card" style="${localStorage.getItem(LS_DEVICES_COLLAPSED) === '1' ? 'display:none' : ''}">
+          ${devicesHtml}
+        </div>`;
+    };
+
+    const render = () => {
+        const installed = state.installed;
+        const dotCls = installed ? 'ht-dot-green' : 'ht-dot-gray';
+        const statusText = installed ? '运行中' : '未启用';
+        const toggleCls = installed ? 'ht-btn-stop' : 'ht-btn-success';
+        const toggleTxt = installed ? `<span class="ht-dot ht-dot-green"></span>停用` : '启用';
+        const diagBtnText = state.diagStatus === 'done' ? '诊断结果' : state.diagStatus === 'running' ? '诊断中...' : '诊断';
+        const _remoteVer = _manifest?.version || '';
+        const _devVer = state._deviceVersion;
+        const _verDisplay = state.installed ? (_devVer || '') : _remoteVer;
+        const _hasUpdate = _remoteVer && _devVer && _remoteVer !== _devVer;
+        const _updateBtnHtml = _hasUpdate ? '<span id="ht-update-btn" style="font-size:.5rem;color:#4ade80;cursor:pointer;margin-left:3px;-webkit-user-select:none;user-select:none;">更新 v' + esc(_remoteVer) + '</span>' : '';
+        const _verHtml = _verDisplay ? `<span id="ht-ver-tap" style="font-size:.5rem;opacity:.35;margin-left:4px;cursor:pointer;-webkit-user-select:none;user-select:none;">v${esc(_verDisplay)}</span>${_updateBtnHtml}` : '';
+
+        return `<div class="ht-wrap">
+        <div class="ht-card">
+          <div class="ht-row" style="justify-content:space-between;">
+            <div class="ht-row"><span class="ht-dot ${dotCls}"></span><span style="font-size:.68rem;">${esc(statusText)}</span>${_verHtml}</div>
+            <div class="ht-row">
+              <button class="ht-btn ht-btn-ghost${newCls('log')}" data-act="log" data-newkey="log" ${installed ? '' : 'disabled'}>日志</button>
+              <button class="ht-btn ht-btn-ghost${newCls('diag')}" data-act="diag" data-newkey="diag" ${installed ? '' : 'disabled'}>${diagBtnText}</button>
+              <button class="ht-btn ${toggleCls}" data-act="toggle">${toggleTxt}</button>
+            </div>
+          </div>
+        </div>
+        <div id="ht_data_area">${renderDataArea()}</div>
+      </div>`;
+    };
+
+    // ─── diag ─────────────────────────────────────────────────────────────────
+    const clearDiagState = () => {
+        state.diagStatus = 'idle';
+        state.diagResult = null;
+    };
+
+    const updateDiagBtn = () => {
+        const btn = document.querySelector(`#${MODAL} [data-act="diag"]`);
+        if (!btn) return;
+        btn.textContent = state.diagStatus === 'done' ? '诊断结果' : state.diagStatus === 'running' ? '诊断中...' : '诊断';
+    };
+
+    const startDiag = async () => {
+        if (!state.installed) return createToast('请先启用插件', 'pink');
+        if (state.diagStatus === 'running') return;
+        state.diagStatus = 'running';
+        updateDiagBtn();
+        const _resetDiag = () => { state.diagStatus = 'idle'; updateDiagBtn(); };
+        try { await readStatus(); } catch (e) { state.summary = null; console.warn('[HT] readStatus in diag:', e); }
+        if (state.summary && state.summary.scriptStartAt) {
+            const startMs = parseTs(state.summary.scriptStartAt);
+            if (!Number.isFinite(startMs)) { _resetDiag(); return createToast('插件数据尚未就绪，请等待采集完成后再诊断', 'pink'); }
+            const elapsed = Date.now() - startMs;
+            if (elapsed < DIAG_COOLDOWN) {
+                const sec = Math.floor(elapsed / 1000);
+                const t = sec >= 60 ? `${Math.floor(sec / 60)}分${sec % 60 ? sec % 60 + '秒' : ''}` : `${sec}秒`;
+                _resetDiag();
+                return createToast(`插件当前启动${t}，请等待至少5分钟后再诊断`, 'pink');
+            }
+        } else if (!state.summary) {
+            _resetDiag();
+            return createToast('插件数据尚未就绪，请等待采集完成后再诊断', 'pink');
+        }
+        const now = new Date();
+        if (now.getHours() === 0 && now.getMinutes() === 0) { _resetDiag(); return createToast('跨日数据重建中，请1分钟后再诊断', 'pink'); }
+        const preChk = await run(`_probe=0; [ -f ${sq(DIAG_BIN_FILE)} ] && _probe=1
+_lock=0; _stale=0; if [ -f ${sq(DIAG_LOCK_FILE)} ]; then _age=$(( $(date +%s) - $(stat -c %Y ${sq(DIAG_LOCK_FILE)} 2>/dev/null || echo 0) )); if [ "$_age" -gt 60 ]; then rm -f ${sq(DIAG_LOCK_FILE)}; _stale=1; else _p=$(awk '{print}' ${sq(DIAG_LOCK_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && _lock=1 || rm -f ${sq(DIAG_LOCK_FILE)}; fi; fi
+_ver=$(timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null)
+echo "$_probe|$_lock|$_stale|$_ver"`, 8000);
+        const [_probeOk, _lockAlive, _stale, _instVer] = String(preChk?.content || '').trim().split('|');
+        if (_probeOk !== '1') { _resetDiag(); return createToast('诊断脚本未就绪，请停用后重新启用插件', 'pink'); }
+        if (_lockAlive === '1') { _resetDiag(); return createToast('诊断正在进行中，请等待完成', 'pink'); }
+        if (_stale === '1') createToast('检测到残留锁文件已清理，正在重新诊断...', 'green', 2000);
+        const currentVer = state._deviceVersion || '';
+        if (_instVer && currentVer && _instVer.trim() !== currentVer) { _resetDiag(); return createToast(`插件已更新(${currentVer})，请重新启用插件以生效`, 'pink', 5000); }
+        const { close: closeLoading } = createFixedToast('ht_diag_loading', '诊断中...');
+        await run(`rm -f ${sq(DIAG_RESULT_FILE)} 2>/dev/null
+cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_PROC} >/dev/null 2>&1 &`, 15000);
+        closeLoading();
+        createToast('诊断已启动，后台执行中...', 'green', 2000);
+        const _diagPoll = setInterval(async () => {
+            try {
+                const dr = await run(`[ -s ${sq(DIAG_RESULT_FILE)} ] && echo __DONE__ || echo __WAIT__`, 3000);
+                if (String(dr?.content || '').includes('__DONE__')) {
+                    clearInterval(_diagPoll);
+                    const dtxt = await run(`timeout 3s awk '{print}' ${sq(DIAG_RESULT_FILE)} 2>/dev/null`, 5000);
+                    const dc = String(dtxt?.content || '').trim();
+                    if (dc) {
+                        try {
+                            state.diagResult = JSON.parse(dc);
+                            state.diagStatus = 'done';
+                            updateDiagBtn();
+                            createToast('诊断完成', 'green', 2000);
+                        } catch {}
+                    }
+                }
+            } catch {}
+        }, 3000);
+        setTimeout(() => {
+            clearInterval(_diagPoll);
+            if (state.diagStatus === 'running') {
+                state.diagStatus = 'idle';
+                updateDiagBtn();
+                createToast('诊断超时或失败，请稍后重试', 'pink');
+            }
+        }, 95000);
+    };
+
+    let _lastReportTime = 0;
+
+    const showDiagResult = () => {
+        if (!state.diagResult) return createToast('暂无诊断结果', 'pink');
+        const j = state.diagResult;
+        const hasIssue = Array.isArray(j.checks) && j.checks.some(c => !c.startsWith('\u2713') && !c.startsWith('\u2139'));
+        const reportStatus = j.auto_reported ? '<span style="color:#4ade80">\u2714 \u5df2\u4e0a\u62a5</span>'
+            : !hasIssue ? '<span style="opacity:.4">\u65e0\u5f02\u5e38\uff0c\u65e0\u9700\u4e0a\u62a5</span>'
+            : '<span style="color:#93c5fd">\u2191 \u5efa\u8bae\u4e0a\u62a5</span>';
+        let html = '';
+
+        if (Array.isArray(j.checks)) {
+            html += `<div style="margin-bottom:6px;display:flex;align-items:baseline;justify-content:space-between"><span><b>检查项</b>${j.timestamp ? `<span style="font-size:.5rem;opacity:.45;margin-left:6px">${esc(j.timestamp)}</span>` : ''}</span><span style="font-size:.5rem">${reportStatus}</span></div>`;
+            j.checks.forEach(c => {
+                const idx1 = c.indexOf(':');
+                const idx2 = c.indexOf(':', idx1 + 1);
+                const sym = c.substring(0, idx1);
+                const id = c.substring(idx1 + 1, idx2);
+                const detail = c.substring(idx2 + 1);
+                const color = sym === '\u2713' ? '#86efac' : sym === '!' ? '#fdba74' : sym === '\u2139' ? '#9ca3af' : '#fca5a5';
+                html += `<div class="ht-diag-item"><span style="color:${color};margin-right:2px">${sym}</span><span style="font-weight:600">${esc(id)}</span><span style="opacity:.4">: </span><span style="opacity:.55">${esc(detail)}</span></div>`;
+            });
+        }
+
+        const text = JSON.stringify(j);
+        const diagVer = j.version || state._deviceVersion || '';
+        const { el: toastEl, close } = createFixedToast('ht_diag_result_toast', `<div style="pointer-events:all;width:92vw;max-width:420px;max-height:75vh;display:flex;flex-direction:column"><div class="title" style="margin:0 0 6px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between">诊断结果<span style="font-size:.5rem;opacity:.35;margin-left:6px;font-weight:400">v${esc(diagVer)}</span>${qqBtnHtml('ht_diag_qq')}</div>${(_manifest && _manifest.version && _manifest.version !== state._deviceVersion) ? '<div id="ht-diag-upd-banner" style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.12);color:#86efac;border-radius:8px;padding:8px 10px;margin:0 0 6px;cursor:pointer;font-size:.55rem"><span>发现新版本 v' + esc(_manifest.version) + '，点此查看</span><span style="opacity:.7">›</span></div>' : ''}<div style="flex:1;overflow:auto;min-height:0">${html}</div><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);flex-shrink:0"><button id="ht_diag_copy" class="ht-btn ht-btn-success" style="font-size:.62rem">复制报告</button><button id="ht_diag_report" class="ht-btn ht-btn-ghost" style="font-size:.62rem">上报</button><button id="ht_diag_redo" class="ht-btn ht-btn-ghost" style="font-size:.62rem">重新诊断</button><button id="ht_diag_close" class="ht-btn ht-btn-ghost" style="font-size:.62rem">关闭</button></div></div>`);
+        toastEl.querySelector('#ht_diag_close').onclick = () => close();
+        const _updBanner = toastEl.querySelector('#ht-diag-upd-banner');
+        if (_updBanner) { _updBanner.onclick = () => { close(); setTimeout(() => performUpdateFlow(), 200); }; }
+        toastEl.querySelector('#ht_diag_copy').onclick = async () => {
+            await copyToClipboard(text);
+            createToast('已复制', 'green');
+        };
+        toastEl.querySelector('#ht_diag_report').onclick = async () => {
+            if (!hasIssue) return groupTip('诊断结果无异常，如有问题请加群反馈（群号已复制）', 'pink', 3000);
+            const markReported = async () => {
+                const _sec = Math.floor(Date.now() / 1000);
+                await run(`printf '%s' ${sq(_sec)} > ${sq(LAST_REPORT_TS_FILE)}
+_m=$(${sq(JQ)} '.auto_reported=true' ${sq(DIAG_RESULT_FILE)} 2>/dev/null); [ -n "$_m" ] && printf '%s' "$_m" > ${sq(DIAG_RESULT_FILE + '.tmp')} && mv ${sq(DIAG_RESULT_FILE + '.tmp')} ${sq(DIAG_RESULT_FILE)}`, 5000);
+                _lastReportTime = _sec * 1000;
+                j.auto_reported = true;
+            };
+            const _st = await run(`_ts=$(awk '{print $1+0}' ${sq(LAST_REPORT_TS_FILE)} 2>/dev/null); _ar=$(awk '/auto_reported/{c=1} END{print c+0}' ${sq(DIAG_RESULT_FILE)} 2>/dev/null); echo "ts=$_ts ar=$_ar"`, 3000);
+            const _out = String(_st?.content || '');
+            const _tsm = _out.match(/ts=(\d+)/);
+            const _fts = _tsm ? parseInt(_tsm[1]) : 0;
+            if (_fts) _lastReportTime = Math.max(_lastReportTime, _fts * 1000);
+            const autoReported = j.auto_reported || _out.includes('ar=1');
+            if (autoReported) return groupTip('当前诊断已上报，请加群跟进（群号已复制）', 'green', 3000);
+            if (_lastReportTime && Date.now() - _lastReportTime < REPORT_COOLDOWN) return groupTip(`上报间隔未达${Math.round(REPORT_COOLDOWN / 60000)}分钟，请稍后重新诊断或加群跟进（群号已复制）`, 'pink');
+            try {
+                const whRes = await run(`awk '{print}' ${sq(WEBHOOK_FILE)} 2>/dev/null`, 3000);
+                const webhookUrl = String(whRes?.content || '').trim();
+                if (!webhookUrl) return groupTip('未获取到上报通道，请加群反馈（群号已复制）', 'red');
+                const body = JSON.stringify({msgtype: 'text', text: {content: text}});
+                const tmpFile = `${DATA_DIR}/_report.tmp`;
+                const r = await run(`printf '%s' ${sq(body)} > ${sq(tmpFile)} && _r=$(timeout 10s curl -s -X POST -H 'Content-Type: application/json;charset=UTF-8' -d @${sq(tmpFile)} ${sq(webhookUrl)} 2>/dev/null) && rm -f ${sq(tmpFile)} && echo "$_r" || { rm -f ${sq(tmpFile)}; echo '{"errcode":-1}'; }`, 15000);
+                const output = String(r?.content || '').trim();
+                if (output.includes('"errcode":0') || output.includes('"errcode": 0')) {
+                    await markReported();
+                    return groupTip('上报成功，可加群跟进（群号已复制）', 'green');
+                } else if (output.includes('310000')) {
+                    return groupTip('当前插件版本过旧，请更新到最新版本后重试或加群反馈（群号已复制）', 'red', 5000);
+                } else {
+                    return groupTip('上报失败，请加群反馈（群号已复制）', 'red');
+                }
+            } catch {
+                return groupTip('上报失败，请加群反馈（群号已复制）', 'red');
+            }
+        };
+        toastEl.querySelector('#ht_diag_qq').onclick = () => groupTip('群号已复制', 'green');
+        toastEl.querySelector('#ht_diag_redo').onclick = async () => { close(); await startDiag(); };
+    };
+
+    const restoreDiagState = async () => {
+        const r = await run(`echo __TS__
+awk '{print $1+0}' ${sq(LAST_REPORT_TS_FILE)} 2>/dev/null
+echo __RESULT__
+[ -s ${sq(DIAG_RESULT_FILE)} ] && timeout 3s awk '{print}' ${sq(DIAG_RESULT_FILE)} 2>/dev/null || echo`, 5000);
+        const text = String(r?.content || '');
+        const _tsStr = text.includes('__TS__') ? text.split('__TS__')[1].split('__RESULT__')[0].trim() : '';
+        const _fts = parseInt(_tsStr) || 0;
+        if (_fts) _lastReportTime = Math.max(_lastReportTime, _fts * 1000);
+        const resultStr = text.includes('__RESULT__') ? text.split('__RESULT__')[1].trim() : '';
+        if (resultStr) {
+            try {
+                state.diagResult = JSON.parse(resultStr);
+                state.diagStatus = 'done';
+            } catch { state.diagStatus = 'idle'; state.diagResult = null; }
+        } else {
+            state.diagStatus = 'idle';
+            state.diagResult = null;
+        }
+    };
+
+    // ─── bind ─────────────────────────────────────────────────────────────────
+    const initDataDelegate = () => {
+        if (_dataEvtBound) return;
+        const area = document.querySelector(`#${MODAL} #ht_data_area`);
+        if (!area) return;
+        _dataEvtBound = true;
+        area.addEventListener('click', (e) => {
+            const reportBtn = e.target.closest('#ht_report_btn');
+            if (reportBtn) { e.stopPropagation(); showUsageReport(); return; }
+            const toggleBtn = e.target.closest('#ht_devices_toggle');
+            if (toggleBtn) {
+                e.stopPropagation();
+                const card = document.querySelector(`#${MODAL} #ht_devices_card`);
+                if (!card) return;
+                const isCollapsed = card.style.display === 'none';
+                card.style.display = isCollapsed ? '' : 'none';
+                toggleBtn.textContent = isCollapsed ? '设备明细 ▲' : '设备明细 ▼';
+                localStorage.setItem(LS_DEVICES_COLLAPSED, isCollapsed ? '0' : '1');
+                return;
+            }
+            const macSpan = e.target.closest('[data-full-mac]');
+            if (macSpan) {
+                e.stopPropagation();
+                const full = macSpan.dataset.fullMac || '';
+                const masked = macSpan.dataset.masked === '1';
+                if (masked) { macSpan.textContent = full; macSpan.dataset.masked = '0'; macSpan.title = '点击隐藏部分 MAC'; }
+                else { macSpan.textContent = maskMac(full); macSpan.dataset.masked = '1'; macSpan.title = '点击查看完整 MAC'; }
+                return;
+            }
+            const editBtn = e.target.closest('[data-edit-mac]');
+            if (editBtn) {
+                e.stopPropagation();
+                const mac = editBtn.dataset.editMac;
+                const row = editBtn.closest('tr');
+                const nameEl = row?.querySelector('[data-ht="name"]');
+                const ipEl = row?.querySelector('[data-ht="ip"]');
+                const displayName = nameEl?.textContent?.replace(/\s*\(我\)$/, '') || '';
+                const ip = ipEl?.textContent || '';
+                showDeviceModal(mac, displayName, ip);
+            }
+
+        });
+    };
+
+    const renderIntoPanel = () => {
+        const box = document.querySelector(`#${MODAL} .collapse_box`);
+        if (!box) return;
+        _dataEvtBound = false;
+        state._viewMode = 'today';
+        state._reportState = null;
+        box.innerHTML = render();
+        bind(document.querySelector(`#${MODAL}`));
+    };
+
+    let _verTapCount = 0, _verTapTimer = null, _updating = false;
+
+    const performUpdate = async (progress = () => {}) => {
+        let curStep = 'manifest';
+        try {
+            progress('manifest', 'running');
+            if (!_manifest) {
+                const raw = await fetchManifestWithProbe('v' + state._deviceVersion + '.json');
+                if (!raw) throw htErr('无法获取版本信息', _lastManifestErr);
+                _manifest = parseManifest(raw);
+                if (!_manifest) throw htErr('版本信息格式异常');
+            }
+            progress('manifest', 'done');
+
+            curStep = 'dl_deploy';
+            progress('dl_deploy', 'running');
+            const deployBin = await downloadDeployScript(_manifest.deployUrl, progress);
+            progress('dl_deploy', 'done');
+
+            curStep = 'deploy';
+            await executeDeploy(deployBin, _manifest, state._deviceVersion || '', progress);
+
+            await run(`rm -f ${sq(DIAG_RESULT_FILE)} ${sq(DATA_DIR + '/diag_state.txt')} ${sq(LAST_REPORT_TS_FILE)} ${sq(DIAG_LOCK_FILE)} 2>/dev/null`);
+            clearDiagState();
+            state._deviceVersion = _manifest.version;
+            progress('complete', 'done');
+        } catch (e) {
+            if (!e.htStep) e.htStep = curStep;
+            throw e;
+        }
+    };
+
+    const showUpdateConfirm = (newVer, notes) => {
+        return new Promise((resolve) => {
+            const notesHtml = (notes && notes.trim()) ? esc(notes.trim()) : '（本次更新暂无说明）';
+            const { el, close } = createFixedToast('ht_update_confirm', `<div style="pointer-events:all;width:88vw;max-width:400px"><div class="title" style="margin:0 0 8px">热点流量监控 · 发现新版本 v${esc(newVer)}</div><div style="font-size:.58rem;line-height:1.6;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:8px 10px;max-height:40vh;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${notesHtml}</div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button id="ht_upd_cancel" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:inherit;cursor:pointer;">取消</button><button id="ht_upd_ok" style="font-size:.62rem;padding:5px 14px;border-radius:7px;border:1px solid rgba(34,197,94,.4);background:rgba(34,197,94,.25);color:#86efac;cursor:pointer;">确认更新</button></div></div>`);
+            let done = false;
+            const finish = (v) => { if (done) return; done = true; close(); resolve(v); };
+            el.querySelector('#ht_upd_cancel').onclick = () => finish(false);
+            el.querySelector('#ht_upd_ok').onclick = () => finish(true);
+        });
+    };
+
+    const performUpdateFlow = async () => {
+        if (_updating) return createToast('正在更新中，请稍候', 'yellow');
+        if (!(await checkAdvancedFunc())) return;
+        if (!_manifest) {
+            const { close: closeChecking } = createFixedToast('ht_update_checking', '正在检查更新...');
+            const raw = await fetchManifestWithProbe('v' + state._deviceVersion + '.json');
+            closeChecking();
+            if (!raw) return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
+            _manifest = parseManifest(raw);
+        }
+        if (!_manifest || _manifest.version === state._deviceVersion) {
+            return createToast('当前已是最新版本 v' + state._deviceVersion, 'green');
+        }
+        const confirmed = await showUpdateConfirm(_manifest.version, _manifest.notes);
+        if (!confirmed) return;
+        const vChk = await run(`awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null`, 3000);
+        const curVer = String(vChk?.content || '').trim().replace(/^pending:/, '');
+        if (curVer && curVer !== state._deviceVersion) {
+            createToast('当前插件已更新到v' + curVer + '，即将刷新页面', 'green');
+            setTimeout(() => location.reload(), 1500);
+            return;
+        }
+        _updating = true;
+        const flow = showFlowProgress('更新热点流量监控', _manifest.md5 ? [...UPDATE_DEPLOY_STEPS.slice(0, UPDATE_DEPLOY_STEPS.findIndex(s => s.id === 'prepare_js')), VERIFY_STEP, ...UPDATE_DEPLOY_STEPS.slice(UPDATE_DEPLOY_STEPS.findIndex(s => s.id === 'prepare_js'))] : UPDATE_DEPLOY_STEPS, '更新失败');
+        try {
+            await performUpdate((id, st, hint) => flow.setStep(id, st, hint));
+            flow.done();
+            createToast('已更新到 v' + state._deviceVersion + '，2秒后刷新页面', 'green');
+            setTimeout(() => location.reload(), 2000);
+        } catch (e) {
+            flow.fail(e.htStep || 'manifest', e?.message || String(e), (e?.htDetail || '') + (e?.htAttempts ? ' | 已重试' + e.htAttempts + '次' : ''), performUpdateFlow);
+        } finally {
+            _updating = false;
+        }
+    };
+
+    const handleUpdateClick = async () => {
+        if (!state.installed) return;
+        if (_updating) return createToast('正在更新中，请稍候', 'yellow');
+        clearTimeout(_verTapTimer);
+        _verTapCount++;
+        _verTapTimer = setTimeout(() => { _verTapCount = 0; }, 3000);
+        if (_verTapCount === 1) return createToast('连续点击3次检查更新', undefined, 1500);
+        if (_verTapCount < 3) return;
+        _verTapCount = 0;
+        clearTimeout(_verTapTimer);
+        await performUpdateFlow();
+    };
+
+    const bind = (el) => {
+        if (!el) return;
+        const toggleBtn = el.querySelector('[data-act="toggle"]');
+        if (toggleBtn) toggleBtn.onclick = async (e) => {
+            const btn = e.currentTarget;
+            if (btn.disabled) return;
+            if (state.installed) { showUninstallConfirm(); return; }
+            btn.disabled = true;
+            try {
+                const probeR = await run(`_p=$(timeout 1s awk '{print}' ${sq(PID_FILE)} 2>/dev/null); [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && echo __ALIVE__ || echo __DEAD__`, 5000);
+                if (String(probeR?.content || '').includes('__ALIVE__')) {
+                    await run(`grep -qxF ${sq(BOOT_LINE)} ${sq(BOOT_SH_FILE)} || echo ${sq(BOOT_LINE)} >> ${sq(BOOT_SH_FILE)}`);
+                    await readStatus();
+                    if (state.installed) await loadData();
+                    renderIntoPanel();
+                    if (state.installed) setAutoData(true);
+                    createToast('插件已在后台运行，已刷新状态', 'green');
+                } else {
+                    await startInstallFlow();
+                }
+            } catch (err) {
+                createToast('操作异常：' + (err && err.message ? err.message : String(err)), 'red');
+            } finally { btn.disabled = false; }
+        };
+        const logBtn = el.querySelector('[data-act="log"]');
+        if (logBtn) logBtn.onclick = (e) => { e.stopPropagation(); showLogPopup(); };
+        const diagBtn = el.querySelector('[data-act="diag"]');
+        if (diagBtn) diagBtn.onclick = async (e) => {
+            e.stopPropagation();
+            if (state.diagStatus === 'done') { showDiagResult(); return; }
+            if (state.diagStatus === 'idle') { await startDiag(); return; }
+        };
+        initDataDelegate();
+
+        const verEl = el.querySelector('#ht-ver-tap');
+        if (verEl) {
+            verEl.onclick = () => { handleUpdateClick(); };
+        }
+        const updateBtn = el.querySelector('#ht-update-btn');
+        if (updateBtn) {
+            updateBtn.onclick = (e) => { e.stopPropagation(); handleUpdateClick(); };
+        }
+    };
+
+    // ─── help ─────────────────────────────────────────────────────────────────
+    const HELP_TEXT = `<div style="line-height:1.7">
+<div style="color:#a5b4fc;font-weight:600;margin-bottom:2px">常用操作</div>
+<ul style="margin:0 0 8px;padding-left:1.2em">
+<li>点 ✎ 给设备命名或拉黑，点「设备明细」可折叠列表</li>
+<li>点「用量报告」看历史用量、趋势与设备分类</li>
+<li>点「日志」/「诊断结果」查看运行日志或上报问题</li>
+</ul>
+<div style="color:#a5b4fc;font-weight:600;margin-bottom:2px">小知识</div>
+<ul style="margin:0;padding-left:1.2em">
+<li>每天 0 点自动归档，历史数据保留 60 天</li>
+<li>同名设备自动合并，随机 MAC 命名后归入已知</li>
+<li>新功能按钮右上角有红点提示，点过即消</li>
+</ul>
+</div>`;
+
+    const showHelp = () => {
+        const { el, close } = createFixedToast('ht_help_toast', `<div style="pointer-events:all;width:80vw;max-width:300px"><div class="title" style="margin:0;display:flex;align-items:center;justify-content:space-between">使用说明${qqBtnHtml('ht_help_qq')}</div><div style="margin:10px 0;font-size:.64rem;line-height:1.6">${HELP_TEXT}</div><div style="text-align:right"><button style="font-size:.62rem" id="ht_help_dismiss">关闭</button></div></div>`);
+        el.querySelector('#ht_help_qq').onclick = () => groupTip('群号已复制', 'green');
+        el.querySelector('#ht_help_dismiss').onclick = () => close();
+    };
+
+    const injectHelpButton = (container) => {
+        const titleEl = container.querySelector('.title strong');
+        if (!titleEl) return;
+        const helpBtn = document.createElement('button');
+        helpBtn.textContent = '?';
+        helpBtn.style.cssText = 'width:16px;height:16px;border-radius:50%;padding:0;font-size:.5rem;line-height:16px;text-align:center;cursor:pointer;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);margin-left:8px;vertical-align:middle;flex-shrink:0;';
+        helpBtn.onclick = (e) => { e.stopPropagation(); showHelp(); };
+        helpBtn.dataset.newkey = 'help';
+        if (!wasSeen('help')) helpBtn.classList.add('ht-newdot');
+        titleEl.insertAdjacentElement('afterend', helpBtn);
+    };
+
+    // ─── mount ────────────────────────────────────────────────────────────────
+    ensureStyle();
+    const getPluginRoot = () => {
+        let root = document.getElementById('kano_plugin_panels');
+        if (!root) {
+            root = document.createElement('div');
+            root.id = 'kano_plugin_panels';
+            root.style.width = '100%';
+            const devMon = document.querySelector('.devices-mon');
+            if (!devMon) return null;
+            devMon.insertAdjacentElement('beforebegin', root);
+        }
+        return root;
+    };
+    const pluginRoot = getPluginRoot();
+    if (!pluginRoot) return;
+    pluginRoot.insertAdjacentHTML('beforeend', `
+        <div id="${MODAL}" style="width:100%;margin-top:10px;">
+            <div class="title" style="margin:6px 0;">
+                <strong>热点流量监控</strong>
+                <div style="display:inline-block;" id="collapse_ht_btn"></div>
+            </div>
+            <div class="collapse" id="collapse_ht" data-name="close" style="height:0;overflow:hidden;">
+                <div class="collapse_box"></div>
+            </div>
+        </div>
+    `);
+
+    const panelEl = document.querySelector(`#${MODAL}`);
+    injectHelpButton(panelEl);
+    const _newdotPanel = document.querySelector(`#${MODAL}`);
+    if (_newdotPanel) {
+        _newdotPanel.addEventListener('click', (e) => {
+            const el = e.target.closest('[data-newkey]');
+            if (el && el.classList.contains('ht-newdot')) markSeen(el.dataset.newkey);
+        }, true);
+    }
+
+    const checkUpdateInBackground = () => {
+        if (!state.installed || !state._deviceVersion) return;
+        fetchManifestWithProbe('v' + state._deviceVersion + '.json').then((raw) => {
+            if (!raw) return;
+            _manifest = parseManifest(raw);
+            if (!_manifest || _manifest.version === state._deviceVersion) return;
+            if (document.querySelector(`#${MODAL} #ht-update-btn`)) return;
+            const vt = document.querySelector(`#${MODAL} #ht-ver-tap`);
+            if (vt) {
+                vt.insertAdjacentHTML('afterend', '<span id="ht-update-btn" style="font-size:.5rem;color:#4ade80;cursor:pointer;margin-left:3px;-webkit-user-select:none;user-select:none;">更新 v' + esc(_manifest.version) + '</span>');
+                const btn = document.querySelector(`#${MODAL} #ht-update-btn`);
+                if (btn) btn.onclick = (e) => { e.stopPropagation(); handleUpdateClick(); };
+            }
+        }).catch(() => { cdnPurge(state._deviceVersion); });
+    };
+
+    const initPanelState = async () => {
+        await readStatus();
+        if (!state.installed) {
+            const bootChk = await run(`grep -q ${sq(NAME)} ${sq(BOOT_SH_FILE)} 2>/dev/null && echo 1 || echo 0`, 3000);
+            if (String(bootChk?.content || '').includes('1')) {
+                await wait(800);
+                await readStatus();
+            }
+        }
+        await recoverDaemonOnce();
+        await restoreDiagState();
+        if (state.installed) await loadData();
+        await loadPolicyMap();
+        renderIntoPanel();
+        setAutoData(state.installed);
+        checkUpdateInBackground();
+    };
+
+    collapseGen('#collapse_ht_btn', '#collapse_ht', '#collapse_ht', async (newVal) => {
+        if (newVal === 'open') await initPanelState();
+        else setAutoData(false);
+    });
+
+    if (localStorage.getItem('#collapse_ht') === 'open') {
+        initPanelState().catch(e => console.warn('[HT] init error:', e));
+    }
+})();
+//</script>

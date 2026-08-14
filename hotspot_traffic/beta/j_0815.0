@@ -339,6 +339,11 @@
 
     const isRandomMac = (mac) => (parseInt(mac.split(':')[0], 16) & 0x02) !== 0;
 
+    const htLocalDate = (d) => {
+        const t = d || new Date();
+        return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
+    };
+
     const dateRange = (start, end) => {
         const arr = [];
         let cur = start;
@@ -1404,9 +1409,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
     const showUsageReport = async () => {
         setAutoData(false);
         state._viewMode = 'report';
-        const today = new Date().toISOString().slice(0, 10);
-        const now = new Date();
-        const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        const today = htLocalDate();
+        const start = `${today.slice(0, 7)}-01`;
         state._reportState = { startDate: start, endDate: today, raw: null, nameMap: null, report: null, chartDev: null, chartMode: DEFAULT_CHART_MODE, _activeTab: 'known' };
         const area = document.querySelector(`#${MODAL} #ht_data_area`);
         if (area) area.innerHTML = renderReportArea();
@@ -1430,7 +1434,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             }
             const raw = JSON.parse(rawContent || '{"days":[]}');
             if (!raw.days) raw.days = [];
-            const today = new Date().toISOString().slice(0, 10);
+            const today = htLocalDate();
             if (rs.startDate <= today && today <= rs.endDate) {
                 if (!state.dataCache) { try { await loadData(); } catch (e) {} }
                 const dc = state.dataCache;
@@ -1762,8 +1766,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                     const endInput = area.querySelector('#ht_rpt_end');
                     let startDate = startInput?.value || rs.startDate;
                     let endDate = endInput?.value || rs.endDate;
-                    const today = new Date().toISOString().slice(0, 10);
-                    const minDate = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+                    const today = htLocalDate();
+                    const minDate = htLocalDate(new Date(Date.now() - 60 * 86400000));
                     if (startDate < minDate) { startDate = minDate; if (startInput) startInput.value = minDate; createToast('最远可回溯60天', '', 2000); }
                     if (endDate <= startDate) { endDate = today; if (endInput) endInput.value = today; createToast('截止日须大于起始日', '', 2000); }
                     rs.startDate = startDate;
@@ -1781,7 +1785,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const devicesMap = (state.dataCache && state.dataCache.devices) ? state.dataCache.devices : {};
         const deviceList = sortDevices(devicesMap);
         const summary = state.summary;
-        const dataDate = (state.dataCache && state.dataCache.date) || new Date().toISOString().slice(0, 10);
+        const dataDate = (state.dataCache && state.dataCache.date) || htLocalDate();
 
         let summaryHtml;
         if (summary) {

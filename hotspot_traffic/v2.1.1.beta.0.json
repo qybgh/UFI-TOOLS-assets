@@ -1,0 +1,8 @@
+{
+    "rev": "2.1.1.beta.1",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/g_0815.0",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/di_0",
+    "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1/j_1",
+    "notes": "优化\n1.修复usb接入设备流量统计持续膨胀的问题\n2.修复usb接入设备在线状态不稳定的问题"
+}

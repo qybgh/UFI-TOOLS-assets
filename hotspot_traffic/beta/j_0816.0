@@ -53,6 +53,7 @@
     const CDN_MIRRORS = ['cdn.jsdmirror.com','jsd.onmicrosoft.cn'];
     const GH_VERSION_BASE = `https://${CDN_ORIGIN}/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/`;
     const CDN_RETRY_PER_NODE = 3;
+    const WIFI_ICON_SVG = '<svg width=".9em" height=".9em" viewBox="3 11 18 12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="opacity:.4;vertical-align:-.18em;margin-left:4px"><path d="M12 20h.01"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 12.5a10 10 0 0 1 14 0"/></svg>';
     const CDN_RETRY_DELAY = 800;
     let _probedBestNode = null;
     const TRAFFIC_BIN_FILE = '/sdcard/hotspot_traffic';
@@ -927,7 +928,8 @@ rm -rf ${sq(DATA_DIR)}
         p('idx', String(index + 1));
         const isMe = device.ip && device.ip === state._clientIp;
         const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
-        const nameHtml = `${esc(displayName)}${meTag}`;
+        const wifiTag = device.connType === 'wifi' ? WIFI_ICON_SVG : '';
+        const nameHtml = `${esc(displayName)}${meTag}${wifiTag}`;
         const nameEl = tr.querySelector('[data-ht="name"]');
         if (nameEl && nameEl.innerHTML !== nameHtml) nameEl.innerHTML = nameHtml;
         p('ip', device.ip || '');
@@ -1149,6 +1151,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const dotCls = online ? 'ht-dot-green' : 'ht-dot-gray';
         const isMe = device.ip && device.ip === state._clientIp;
         const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
+        const wifiTag = device.connType === 'wifi' ? WIFI_ICON_SVG : '';
         const pol = state.policyMap[device.mac];
         const polBg = pol?.type === 'blacklist' ? '#f87171' : '';
         const polDot = `<span data-ht="pol" style="display:${pol ? 'inline-block' : 'none'};width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;opacity:.7${polBg ? ';background:' + polBg : ''}"></span>`;
@@ -1158,7 +1161,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         <td>
           <div class="ht-td-name">
             <span class="ht-dot ${dotCls}" data-ht="dot"></span>
-            ${polDot}<span data-ht="name">${esc(displayName)}${meTag}</span>
+            ${polDot}<span data-ht="name">${esc(displayName)}${meTag}${wifiTag}</span>
           </div>
           <div class="ht-td-meta"><span data-ht="ip">${esc(device.ip || '')}</span> | <span class="ht-mac" data-full-mac="${safeMac}" data-masked="1" title="点击查看完整 MAC">${esc(maskMac(device.mac || ''))}</span></div>
         </td>

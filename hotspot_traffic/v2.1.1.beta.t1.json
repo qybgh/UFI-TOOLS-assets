@@ -1,0 +1,8 @@
+{
+    "rev": "2.1.1.beta.t2",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.1/g_0",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/di_0",
+    "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.1/j_0",
+    "notes": "1.设备明细新增wifi接入方式的标识\n2.“每日流量趋势”折线图新增参考线及触摸交互\n3.修复usb接入设备流量统计持续膨胀的问题\n4.修复usb接入设备在线状态不稳定的问题\n5.减少插件后台内存占用（较之前降低超50%）"
+}

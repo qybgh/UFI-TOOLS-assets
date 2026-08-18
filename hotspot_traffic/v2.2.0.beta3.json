@@ -1,8 +1,8 @@
 {
-    "rev": "2.2.0.beta3",
-    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/g_0818.0",
+    "rev": "2.2.0.beta4",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/g_0818.1",
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/di_0817.1",
     "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
     "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.1/j_0",
-    "notes": "1.引擎层支持多WAN口流量统计，解决多卡切换导致数据异常\n2.修复极端情况下“未归属”数据统计默认丢弃的问题\n3.其它细节优化"
+    "notes": "1.引擎层支持多WAN口流量统计，解决多卡切换导致数据异常\n2.修复极端情况下“未归属”数据统计被丢弃的问题\n3.其它细节优化"
 }

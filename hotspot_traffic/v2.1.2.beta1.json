@@ -1,8 +1,0 @@
-{
-    "rev": "2.1.2.beta2",
-    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/g_0818.3",
-    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/di_0818.1",
-    "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
-    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.1/j_0",
-    "notes": "1.引擎层支持多WAN口流量统计，根本解决SIM卡切换导致数据统计不完整的现象\n2.修复部分情况下“未归属”数据统计发生丢失的问题\n3.其它细节优化"
-}

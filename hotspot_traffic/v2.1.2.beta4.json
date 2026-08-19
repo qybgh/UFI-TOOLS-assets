@@ -1,6 +1,6 @@
 {
-    "rev": "2.1.2.beta4",
-    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/g_0819.1",
+    "rev": "2.1.2.beta5",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/g_0819.2",
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/di_0818.1",
     "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
     "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.1/j_0",

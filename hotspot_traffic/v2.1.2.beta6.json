@@ -4,5 +4,5 @@
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/di_0818.1",
     "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
     "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/j_0824.0",
-    "notes": "1.引擎层支持多WAN口流量统计，解决多SIM卡设备数据统计不完整的现象\n2.完善“未归属”数据统计逻辑\n3.优化历史拉黑设备显示逻辑\n4.修复设备开机时钟重置误触发数据归档的问题\n5.其它细节优化"
+    "notes": "1.引擎层支持多WAN口流量统计，解决多SIM卡设备数据统计不完整的现象\n2.完善“未归属”数据统计逻辑\n3.优化历史拉黑设备显示逻辑\n4.修复设备时钟重置误触发数据归档的问题\n5.其它细节优化"
 }

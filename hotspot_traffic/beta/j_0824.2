@@ -962,7 +962,7 @@ rm -rf ${sq(DATA_DIR)}
         const isMe = device.ip && device.ip === state._clientIp;
         const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
         const wifiTag = device.connType === 'wifi' ? WIFI_ICON_SVG : '';
-        const histTag = device._synthetic ? '<span class="ht-hist-tag" style="font-size:.5rem;opacity:.55;margin-left:4px;border:1px solid currentColor;border-radius:4px;padding:0 3px;vertical-align:middle;">历史</span>' : '';
+        const histTag = device._synthetic ? '<span style="color:#999;font-size:.55rem"> (历史)</span>' : '';
         const nameHtml = `${esc(displayName)}${meTag}${wifiTag}${histTag}`;
         const nameEl = tr.querySelector('[data-ht="name"]');
         if (nameEl && nameEl.innerHTML !== nameHtml) nameEl.innerHTML = nameHtml;
@@ -1190,7 +1190,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const isMe = device.ip && device.ip === state._clientIp;
         const meTag = isMe ? '<span style="color:#999;font-size:.55rem"> (我)</span>' : '';
         const wifiTag = device.connType === 'wifi' ? WIFI_ICON_SVG : '';
-        const histTag = device._synthetic ? '<span class="ht-hist-tag" style="font-size:.5rem;opacity:.55;margin-left:4px;border:1px solid currentColor;border-radius:4px;padding:0 3px;vertical-align:middle;">历史</span>' : '';
+        const histTag = device._synthetic ? '<span style="color:#999;font-size:.55rem"> (历史)</span>' : '';
         const pol = state.policyMap[device.mac];
         const polBg = pol?.type === 'blacklist' ? '#f87171' : '';
         const polDot = `<span data-ht="pol" style="display:${pol ? 'inline-block' : 'none'};width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;opacity:.7${polBg ? ';background:' + polBg : ''}"></span>`;
@@ -1269,7 +1269,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         showModal(id);
     };
 
-   const renderUlDl = (tx, rx) => `<div style="font-size:.48rem;opacity:.7;white-space:nowrap"><span class="ht-up">↑${esc(htFormatBytes(tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(rx))}</span></div>`;
+    const renderUlDl = (tx, rx) => `<div style="font-size:.48rem;opacity:.7;white-space:nowrap"><span class="ht-up">↑${esc(htFormatBytes(tx))}</span> <span class="ht-down">↓${esc(htFormatBytes(rx))}</span></div>`;
 
     const reportDevLabel = (devKey) => {
         const rs = state._reportState;
@@ -1392,8 +1392,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         </div>`;
 
         const knownList = [
-          ...rpt.named.map(d => Object.assign({ _rtype: 'named' }, d)),
-          ...rpt.stable.map(d => Object.assign({ _rtype: 'stable' }, d))
+            ...rpt.named.map(d => Object.assign({ _rtype: 'named' }, d)),
+            ...rpt.stable.map(d => Object.assign({ _rtype: 'stable' }, d))
         ].sort((a, b) => (b.totalTx + b.totalRx) - (a.totalTx + a.totalRx));
         const knownListHtml = knownList.map((dev, i) => {
             const total = dev.totalTx + dev.totalRx;
@@ -2022,7 +2022,7 @@ cp ${sq(DIAG_BIN_FILE)} ${DIAG_PROC} && chmod 755 ${DIAG_PROC} && nohup ${DIAG_P
         const hasIssue = Array.isArray(j.checks) && j.checks.some(c => !c.startsWith('\u2713') && !c.startsWith('\u2139'));
         const reportStatus = j.auto_reported ? '<span style="color:#4ade80">\u2714 \u5df2\u4e0a\u62a5</span>'
             : !hasIssue ? '<span style="opacity:.4">\u65e0\u5f02\u5e38\uff0c\u65e0\u9700\u4e0a\u62a5</span>'
-            : '<span style="color:#93c5fd">\u2191 \u5efa\u8bae\u4e0a\u62a5</span>';
+                : '<span style="color:#93c5fd">\u2191 \u5efa\u8bae\u4e0a\u62a5</span>';
         let html = '';
 
         if (Array.isArray(j.checks)) {

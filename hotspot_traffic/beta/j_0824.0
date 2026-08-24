@@ -336,7 +336,12 @@
     };
 
     const htFormatRate = (bps) => htFormatBytes(bps) + '/s';
-    const renderTrafficRateCell = (device, total, tx, rx) => `<span>${esc(htFormatBytes(total))} <span style="font-size:.48rem;opacity:.7;white-space:nowrap">↑${esc(htFormatBytes(tx))} ↓${esc(htFormatBytes(rx))}</span></span> <span class="ht-rate-seg" style="font-size:.48rem;opacity:.85;white-space:nowrap"><span class="ht-up">↑${esc(htFormatRate(device.txRateBps))}</span> <span class="ht-down">↓${esc(htFormatRate(device.rxRateBps))}</span></span>`;
+    const renderTrafficRateCell = (device, total, tx, rx) => {
+        const _upCls = device.online ? 'ht-up' : '';
+        const _dnCls = device.online ? 'ht-down' : '';
+        const _rateOp = device.online ? '.85' : '.7';
+        return `<span>${esc(htFormatBytes(total))} <span style="font-size:.48rem;opacity:.7;white-space:nowrap">↑${esc(htFormatBytes(tx))} ↓${esc(htFormatBytes(rx))}</span></span> <span class="ht-rate-seg" style="font-size:.48rem;opacity:${_rateOp};white-space:nowrap"><span class="${_upCls}">↑${esc(htFormatRate(device.txRateBps))}</span> <span class="${_dnCls}">↓${esc(htFormatRate(device.rxRateBps))}</span></span>`;
+    };
 
     const isRandomMac = (mac) => (parseInt(mac.split(':')[0], 16) & 0x02) !== 0;
 
@@ -388,6 +393,18 @@
         if (!a.online && b.online) return 1;
         return ((b.rxBytes || 0) + (b.txBytes || 0)) - ((a.rxBytes || 0) + (a.txBytes || 0));
     });
+    const buildDeviceList = () => {
+        const devices = (state.dataCache && state.dataCache.devices) ? state.dataCache.devices : {};
+        const realMACs = new Set(Object.keys(devices).map(k => k.toUpperCase()));
+        const merged = Object.assign({}, devices);
+        const pm = state.policyMap;
+        for (const mac in pm) {
+            if (pm[mac].type === 'blacklist' && !realMACs.has(mac.toUpperCase())) {
+                merged[mac] = { mac, online: false, ip: '', hostname: '', customName: '', txBytes: 0, rxBytes: 0, txBytesV4: 0, rxBytesV4: 0, txBytesV6: 0, rxBytesV6: 0, txRateBps: 0, rxRateBps: 0, lastSeen: '', reconnects: 0 };
+            }
+        }
+        return sortDevices(merged);
+    };
 
     const calcSummaryMetrics = (summary, deviceList) => {
         const sysDelta = summary.sysDeltaBytes || 0;
@@ -930,7 +947,7 @@ rm -rf ${sq(DATA_DIR)}
         const nameHtml = `${esc(displayName)}${meTag}${wifiTag}`;
         const nameEl = tr.querySelector('[data-ht="name"]');
         if (nameEl && nameEl.innerHTML !== nameHtml) nameEl.innerHTML = nameHtml;
-        p('ip', device.ip || '');
+        p('ip', device.ip ? device.ip + ' ' : '');
         const tfEl = tr.querySelector('[data-ht="tf"]');
         const tfHtml = renderTrafficRateCell(device, totalBytes, txBytes, rxBytes);
         if (tfEl && tfEl.innerHTML !== tfHtml) tfEl.innerHTML = tfHtml;
@@ -947,7 +964,7 @@ rm -rf ${sq(DATA_DIR)}
             await loadData(preloaded);
             const el = document.querySelector(`#${MODAL} #ht_data_area`);
             if (!el || !state.dataCache) return;
-            const deviceList = sortDevices(state.dataCache.devices || {});
+            const deviceList = buildDeviceList();
             _patchSummaryGrid(el, deviceList);
             const tbody = el.querySelector('tbody');
             if (!tbody) { if (deviceList.length > 0) { el.innerHTML = renderDataArea(); initDataDelegate(); } return; }
@@ -1165,7 +1182,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             <span class="ht-dot ${dotCls}" data-ht="dot"></span>
             ${polDot}<span data-ht="name">${esc(displayName)}${meTag}${wifiTag}</span>
           </div>
-          <div class="ht-td-meta"><span data-ht="ip">${esc(device.ip || '')}</span> | <span class="ht-mac" data-full-mac="${safeMac}" data-masked="1" title="点击查看完整 MAC">${esc(maskMac(device.mac || ''))}</span></div>
+          <div class="ht-td-meta"><span data-ht="ip">${device.ip ? esc(device.ip) + ' ' : ''}</span><span class="ht-mac" data-full-mac="${safeMac}" data-masked="1" title="点击查看完整 MAC">${esc(maskMac(device.mac || ''))}</span></div>
         </td>
         <td class="ht-td-num ht-total" data-ht="tf">${renderTrafficRateCell(device, totalBytes, txBytes, rxBytes)}</td>
       </tr>`;
@@ -1183,7 +1200,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const content = `
       <div style="font-size:.72rem;color:#94a3b8;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
         <b style="color:#e2e8f0">${esc(displayName || '未知设备')}</b>
-        <span>${esc(ip || '')}</span>
+        ${ip ? '<span>' + esc(ip) + '</span>' : ''}
         <span class="ht-mac-toggle" style="cursor:pointer;color:#64748b;border-bottom:1px dashed #475569" data-masked="${esc(masked)}" data-full="${esc(mac)}">${esc(masked)}</span>
       </div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
@@ -1198,7 +1215,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       </div>`;
         const { id, el } = createModal({
             name: 'ht_device_modal',
-            title: '热点流量监控 · 设备管理',
+            title: '热点监控 · 设备管理',
             content,
             showConfirm: true,
             confirmBtnText: '应用',
@@ -1440,9 +1457,10 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
             if (rs.startDate <= today && today <= rs.endDate) {
                 if (!state.dataCache) { try { await loadData(); } catch (e) {} }
                 const dc = state.dataCache;
-                if (dc && dc.devices && !raw.days.find(d => d.date === today)) {
+                const injectDate = (dc && dc.date) || today;
+                if (dc && dc.devices && !raw.days.find(d => d.date === injectDate)) {
                     raw.days.push({
-                        date: dc.date || today,
+                        date: injectDate,
                         devices: Object.values(dc.devices).map(d => ({
                             m: d.mac,
                             h: d.hostname || '',
@@ -1460,6 +1478,10 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                     });
                 }
             }
+            raw.days = Object.values(raw.days.reduce((acc, d) => {
+                if (!acc[d.date] || (d.dt || 0) > (acc[d.date].dt || 0)) acc[d.date] = d;
+                return acc;
+            }, {}));
             if (!raw.days.length) {
                 rs.raw = []; rs.nameMap = nameMap; rs.report = aggregateReport([], nameMap, rs.startDate, rs.endDate);
                 area.innerHTML = renderReportArea();
@@ -1790,7 +1812,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                     const today = formatLocalDate(new Date());
                     const minDate = formatLocalDate(new Date(Date.now() - 60 * 86400000));
                     if (startDate < minDate) { startDate = minDate; if (startInput) startInput.value = minDate; createToast('最远可回溯60天', '', 2000); }
-                    if (endDate <= startDate) { endDate = today; if (endInput) endInput.value = today; createToast('截止日须大于起始日', '', 2000); }
+                    if (endDate < startDate) { endDate = startDate; if (endInput) endInput.value = startDate; createToast('截止日不得早于起始日', '', 2000); }
                     rs.startDate = startDate;
                     rs.endDate = endDate;
                     rs.chartDev = null;
@@ -1803,8 +1825,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
     const renderDataArea = () => {
         if (state._viewMode === 'report') return renderReportArea();
         const installed = state.installed;
-        const devicesMap = (state.dataCache && state.dataCache.devices) ? state.dataCache.devices : {};
-        const deviceList = sortDevices(devicesMap);
+        const deviceList = buildDeviceList();
         const summary = state.summary;
         const dataDate = (state.dataCache && state.dataCache.date) || formatLocalDate(new Date());
 
@@ -2287,7 +2308,7 @@ echo __RESULT__
     pluginRoot.insertAdjacentHTML('beforeend', `
         <div id="${MODAL}" style="width:100%;margin-top:10px;">
             <div class="title" style="margin:6px 0;">
-                <strong>热点流量监控</strong>
+                <strong>热点监控</strong>
                 <div style="display:inline-block;" id="collapse_ht_btn"></div>
             </div>
             <div class="collapse" id="collapse_ht" data-name="close" style="height:0;overflow:hidden;">

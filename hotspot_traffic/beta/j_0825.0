@@ -2364,6 +2364,8 @@ echo __RESULT__
 
     const panelEl = document.querySelector(`#${MODAL}`);
     injectHelpButton(panelEl);
+    const _hb0 = panelEl.querySelector('[data-newkey="help"]');
+    if (_hb0) _hb0.style.display = (localStorage.getItem('#collapse_ht') === 'open') ? '' : 'none';
     const _newdotPanel = document.querySelector(`#${MODAL}`);
     if (_newdotPanel) {
         _newdotPanel.addEventListener('click', (e) => {
@@ -2407,6 +2409,8 @@ echo __RESULT__
     };
 
     collapseGen('#collapse_ht_btn', '#collapse_ht', '#collapse_ht', async (newVal) => {
+        const _hb = panelEl.querySelector('[data-newkey="help"]');
+        if (_hb) _hb.style.display = newVal === 'open' ? '' : 'none';
         if (newVal === 'open') await initPanelState();
         else setAutoData(false);
     });

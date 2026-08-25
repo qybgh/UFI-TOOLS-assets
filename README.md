@@ -23,7 +23,7 @@ UFI-TOOLS 相关资源文件仓库，主要用于存放项目所需的静态资�
 `1019849819`
 
 ### QQ 群二维码
-![QQ群二维码](./assets/qq-group-qrcode.png)
+![QQ群二维码](./assets/qq-group-qrcode.jpg)
 
 > 说明：资源更新、使用说明和重要通知会优先在群内同步，建议及时加入，避免错过最新内容。
 

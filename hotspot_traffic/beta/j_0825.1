@@ -59,6 +59,9 @@
     let _probedBestNode = null;
     const TRAFFIC_BIN_FILE = '/sdcard/hotspot_traffic';
     const PENDING_JS_FILE = '/data/local/tmp/_ht_pending.js';
+    const POLICY_DEFS = {
+        blacklist: { label: '拉黑', desc: '禁止联网', color: '#f87171', summaryClass: 'ht-status-alert', showOffline: true },
+    };
 
     const cdnUrlForNode = (url, node) => url ? url.replace(CDN_ORIGIN, node) : url;
     const cdnPurge = (ver) => { if (ver) run(`curl -sL --connect-timeout 5 --max-time 10 ${sq((GH_VERSION_BASE + 'v' + ver + '.json').replace(CDN_ORIGIN, 'purge.jsdelivr.net'))}`, 12000).catch(() => {}); };
@@ -410,7 +413,7 @@
         const merged = Object.assign({}, devices);
         const pm = state.policyMap;
         for (const mac in pm) {
-            if (pm[mac].type === 'blacklist' && !realMACs.has(mac.toUpperCase())) {
+            if (POLICY_DEFS[pm[mac].type]?.showOffline && !realMACs.has(mac.toUpperCase())) {
                 const uMac = mac.toUpperCase();
                 merged[mac] = {
                     mac, online: false, ip: '',
@@ -431,7 +434,7 @@
         const macs = [];
         for (const mac in (state.policyMap || {})) {
             const u = mac.toUpperCase();
-            if (state.policyMap[mac].type === 'blacklist' && !real.has(u)) macs.push(u);
+            if (POLICY_DEFS[state.policyMap[mac].type]?.showOffline && !real.has(u)) macs.push(u);
         }
         const key = macs.sort().join(',');
         if (key === state._synthHostKey) return;
@@ -473,11 +476,13 @@
 
     const summaryHtmls = (m) => {
         const _pv = Object.values(state.policyMap);
-        const blCount = _pv.filter(p => p.type === 'blacklist').length;
+        const _policyCounts = {};
+        for (const p of _pv) { if (POLICY_DEFS[p.type]) _policyCounts[p.type] = (_policyCounts[p.type] || 0) + 1; }
+        const _policyStatsHtml = Object.keys(POLICY_DEFS).filter(k => _policyCounts[k]).map(k => `${POLICY_DEFS[k].label} <span class="${POLICY_DEFS[k].summaryClass}">${_policyCounts[k]}</span>`).join(' ');
         return [
             `<div class="ht-summary-val">${esc(htFormatBytes(m.sysDelta))}</div>${(m.sysTxDelta || m.sysRxDelta) ? renderUlDl(m.sysTxDelta, m.sysRxDelta) : ''}<div class="ht-summary-lbl">系统增量</div>`,
             `<div class="ht-summary-val">${esc(htFormatBytes(m.iptTotal))} <span style="font-size:.48rem;opacity:.7">偏差:<span class="${m.diffCls}">${esc(htFormatBytes(m.diffSigned))}</span></span></div><div style="font-size:.48rem;opacity:.7;white-space:nowrap">v4:<span class="ht-up">${esc(htFormatBytes(m.iptV4))}</span> v6:<span class="ht-down">${esc(htFormatBytes(m.iptV6))}</span></div><div class="ht-summary-lbl">热点合计</div>`,
-            `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${blCount ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">拉黑 <span class="ht-status-alert">${blCount}</span></div>` : ''}<div class="ht-summary-lbl">接入设备</div>`,
+            `<div class="ht-summary-val">在线 <span class="${m.onlineCount > 0 ? 'ht-status-ok' : 'ht-muted'}">${m.onlineCount}</span> / 总 ${m.deviceCount}</div>${_policyStatsHtml ? `<div style="font-size:.48rem;opacity:.7;white-space:nowrap">${_policyStatsHtml}</div>` : ''}<div class="ht-summary-lbl">接入设备</div>`,
             `<div class="ht-summary-val">${esc(htFormatBytes(m.deviceTotalBytes))} <span style="font-size:.48rem;opacity:.7">未归属:<span class="${m.unattrCls}">${esc(htFormatBytes(m.unattrSigned))}</span></span></div>${renderUlDl(m.deviceTxBytes, m.deviceRxBytes)}<div class="ht-summary-lbl">设备合计</div>`,
         ];
     };
@@ -1000,7 +1005,7 @@ rm -rf ${sq(DATA_DIR)}
         const tfHtml = renderTrafficRateCell(device, totalBytes, txBytes, rxBytes);
         if (tfEl && tfEl.innerHTML !== tfHtml) tfEl.innerHTML = tfHtml;
         const polEl = tr.querySelector('[data-ht="pol"]');
-        if (polEl) { const pol = state.policyMap[device.mac]; const wantBg = pol?.type === 'blacklist' ? '#f87171' : ''; if (polEl.style.background !== wantBg) { polEl.style.display = pol ? 'inline-block' : 'none'; polEl.style.background = wantBg; } }
+        if (polEl) { const pol = state.policyMap[device.mac]; const _pd = pol && POLICY_DEFS[pol.type]; const wantBg = _pd?.color || ''; if (polEl.style.background !== wantBg) { polEl.style.display = _pd ? 'inline-block' : 'none'; polEl.style.background = wantBg; } }
         const dot = tr.querySelector('[data-ht="dot"]');
         if (dot) { const cls = device.online ? 'ht-dot ht-dot-green' : 'ht-dot ht-dot-gray'; if (dot.className !== cls) dot.className = cls; }
     };
@@ -1221,8 +1226,8 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const wifiTag = device.connType === 'wifi' ? WIFI_ICON_SVG : '';
         const histTag = device._synthetic ? '<span style="color:#999;font-size:.55rem"> (历史)</span>' : '';
         const pol = state.policyMap[device.mac];
-        const polBg = pol?.type === 'blacklist' ? '#f87171' : '';
-        const polDot = `<span data-ht="pol" style="display:${pol ? 'inline-block' : 'none'};width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;opacity:.7${polBg ? ';background:' + polBg : ''}"></span>`;
+        const _pd = pol && POLICY_DEFS[pol.type];
+        const polDot = `<span data-ht="pol" style="display:${_pd ? 'inline-block' : 'none'};width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle;opacity:.7${_pd ? ';background:' + _pd.color : ''}"></span>`;
         return `<tr data-mac="${safeMac}">
         <td style="opacity:.4;font-size:.54rem;width:10px;text-align:center;" data-ht="idx">${index + 1}</td>
         <td><button class="ht-edit-mini${newCls('edit_device')}" data-edit-mac="${safeMac}" data-newkey="edit_device" title="自定义名称">✎</button></td>
@@ -1260,7 +1265,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
       <div style="border-top:1px solid #1e293b;margin:10px 0"></div>
       <div style="display:flex;flex-direction:column;gap:8px;font-size:.7rem;color:#e2e8f0">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="normal" ${curPol==='normal'?'checked':''} style="accent-color:#667eea"> 正常（无限制）</label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="blacklist" ${curPol==='blacklist'?'checked':''} style="accent-color:#667eea"> 拉黑（禁止联网）</label>
+        ${Object.entries(POLICY_DEFS).map(([k, d]) => `<label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="pol" value="${k}" ${curPol===k?'checked':''} style="accent-color:#667eea"> ${d.label}（${d.desc}）</label>`).join('')}
       </div>`;
         const { id, el } = createModal({
             name: 'ht_device_modal',
@@ -1274,7 +1279,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                 const type = el.querySelector('input[name="pol"]:checked')?.value;
                 let policyOk = true;
                 if (type === 'normal') { const r = await policyRemove(mac); if (!r?.success) policyOk = false; }
-                else if (type === 'blacklist') { const r = await policySet(mac, 'blacklist'); if (!r?.success) policyOk = false; }
+                else if (POLICY_DEFS[type]) { const r = await policySet(mac, type); if (!r?.success) policyOk = false; }
                 if (!policyOk) { createToast('策略保存失败，请稍后重试', 'red', 3000); return false; }
                 await loadPolicyMap();
                 setCustomName(mac, newName);

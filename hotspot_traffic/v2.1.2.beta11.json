@@ -1,8 +1,8 @@
 {
-    "rev": "2.1.2.beta11",
+    "rev": "2.1.2.beta12",
     "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/g_0825.1",
     "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/di_0824.0",
     "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
-    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/j_0825.1",
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/beta/j_0825.2",
     "notes": "1.引擎层支持多WAN口流量统计，解决多SIM卡数据统计不完整的现象\n2.完善“未归属”数据统计逻辑\n3.保留历史拉黑设备的明细展示\n4.修复设备时钟重置误触发数据归档的问题\n5.其它细节优化"
 }

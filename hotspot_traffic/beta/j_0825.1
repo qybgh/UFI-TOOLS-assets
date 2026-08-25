@@ -40,6 +40,7 @@
     const BOOT_LINE = `cp /sdcard/hotspot_traffic ${TRAFFIC_PROC} && chmod 755 ${TRAFFIC_PROC} && nohup ${TRAFFIC_PROC} >/dev/null 2>&1 &`;
     const WEBHOOK_FILE = `${DATA_DIR}/.webhook`;
     const CUSTOM_NAMES_FILE = `${DATA_DIR}/custom_names.txt`;
+    const DHCP_NAMES_FILE = `${DATA_DIR}/dhcp_names.txt`;
     const MODE_SYS = 'sd';
     const MODE_IPT = 'it';
     const MODE_DEV = 'dt';
@@ -112,9 +113,9 @@
         throw lastErr;
     };
 
-    const policySet = async (mac, type, name) => {
+    const policySet = async (mac, type) => {
         await run(`[ -s ${sq(POLICY_FILE)} ] || printf '{}' > ${sq(POLICY_FILE)}`);
-        const r = await run(`timeout 2s ${sq(JQ)} -c --arg m ${sq(mac)} --arg t ${sq(type)} --arg n ${sq(name || '')} '.[$m]={"type":$t,"name":$n}' ${sq(POLICY_FILE)} > ${sq(POLICY_FILE)}.tmp && mv ${sq(POLICY_FILE)}.tmp ${sq(POLICY_FILE)} && printf 1 > ${sq(POLICY_TRIGGER)} && echo __OK__ || { rm -f ${sq(POLICY_FILE)}.tmp; echo __FAIL__; }`);
+        const r = await run(`timeout 2s ${sq(JQ)} -c --arg m ${sq(mac)} --arg t ${sq(type)} '.[$m]={"type":$t}' ${sq(POLICY_FILE)} > ${sq(POLICY_FILE)}.tmp && mv ${sq(POLICY_FILE)}.tmp ${sq(POLICY_FILE)} && printf 1 > ${sq(POLICY_TRIGGER)} && echo __OK__ || { rm -f ${sq(POLICY_FILE)}.tmp; echo __FAIL__; }`);
         return { success: (r?.content || '').includes('__OK__'), content: r?.content };
     };
 
@@ -322,12 +323,11 @@
     const _pnKey = (mac) => LS_KEY + 'pn_' + mac.toUpperCase();
     const setCustomName = (mac, name) => {
         const uMac = mac.toUpperCase();
-        localStorage.setItem(_pnKey(uMac), name.trim());
-        if (name.trim()) {
-            run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; printf '%s\\n' ${sq(uMac + '|' + name.trim())} >> "$_f.tmp"; mv "$_f.tmp" "$_f"`);
-        } else {
-            run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; mv "$_f.tmp" "$_f"`);
-        }
+        const clean = (name || '').trim();
+        localStorage.setItem(_pnKey(uMac), clean);
+        if (state._custMap) { if (clean) state._custMap[uMac] = clean; else delete state._custMap[uMac]; }
+        if (clean) { run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; printf '%s\\n' ${sq(uMac + '|' + clean)} >> "$_f.tmp"; mv "$_f.tmp" "$_f"`); }
+        else { run(`_f=${sq(CUSTOM_NAMES_FILE)}; grep -v ${sq('^' + uMac + '|')} "$_f" > "$_f.tmp" 2>/dev/null; mv "$_f.tmp" "$_f"`); }
     };
     const htFormatBytes = (bytes) => {
         const num = parseInt(bytes) || 0;
@@ -388,6 +388,7 @@
             const newVal = nameMap[u] || '';
             localStorage.setItem(_pnKey(u), newVal);
         });
+        state._custMap = Object.fromEntries(Object.entries(nameMap).filter(([, v]) => v).map(([k, v]) => [k.toUpperCase(), v]));
     };
 
     const maskMac = (mac) => {
@@ -410,11 +411,11 @@
         const pm = state.policyMap;
         for (const mac in pm) {
             if (pm[mac].type === 'blacklist' && !realMACs.has(mac.toUpperCase())) {
-                const _pol = pm[mac];
+                const uMac = mac.toUpperCase();
                 merged[mac] = {
                     mac, online: false, ip: '',
-                    hostname: '',
-                    customName: (_pol && _pol.name) || '',
+                    hostname: (state._synthHost && state._synthHost[uMac]) || '',
+                    customName: (state._custMap && state._custMap[uMac]) || '',
                     txBytes: 0, rxBytes: 0, txBytesV4: 0, rxBytesV4: 0,
                     txBytesV6: 0, rxBytesV6: 0, txRateBps: 0, rxRateBps: 0,
                     lastSeen: '', reconnects: 0, _synthetic: true
@@ -422,6 +423,26 @@
             }
         }
         return sortDevices(merged);
+    };
+
+    const refreshSyntheticHost = async () => {
+        const devs = state.dataCache?.devices || {};
+        const real = new Set(Object.keys(devs).map(k => k.toUpperCase()));
+        const macs = [];
+        for (const mac in (state.policyMap || {})) {
+            const u = mac.toUpperCase();
+            if (state.policyMap[mac].type === 'blacklist' && !real.has(u)) macs.push(u);
+        }
+        const key = macs.sort().join(',');
+        if (key === state._synthHostKey) return;
+        state._synthHostKey = key;
+        if (!macs.length) { state._synthHost = {}; return; }
+        const list = macs.join(' ');
+        const dn = await run(`awk -F'|' -v L=${sq(list)} 'BEGIN{n=split(L,a," ");for(i=1;i<=n;i++)w[toupper(a[i])]=1} (toupper($1) in w){print $1"|"$2}' ${sq(DHCP_NAMES_FILE)} 2>/dev/null || true`);
+        const dm = parseMacMap(dn?.content);
+        const out = {};
+        for (const u of macs) out[u] = dm[u] || '';
+        state._synthHost = out;
     };
 
     const calcSummaryMetrics = (summary, deviceList) => {
@@ -499,12 +520,18 @@ timeout 2s awk '{print}' ${sq(DATA_DIR + '/.version')} 2>/dev/null || true
                 }
             } catch { }
         }
-        for (const mac of Object.keys(state.dataCache?.devices || {})) {
-            const pv = localStorage.getItem(_pnKey(mac));
+        state._custMap = await loadNameMap();
+        const _cust = state._custMap || {};
+        const _devs = state.dataCache?.devices || {};
+        const _pfx = _pnKey('');
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+            const k = localStorage.key(i);
+            if (!k || k.indexOf(_pfx) !== 0) continue;
+            const uMac = k.slice(_pfx.length);
+            const pv = localStorage.getItem(k);
             if (pv === null) continue;
-            const dev = state.dataCache.devices[mac];
-            if (pv === '' && !dev.customName) localStorage.removeItem(_pnKey(mac));
-            else if (pv && dev.customName === pv) localStorage.removeItem(_pnKey(mac));
+            const known = ((_devs[uMac] || _devs[uMac.toLowerCase()])?.customName || '').trim() || (_cust[uMac] || '');
+            if (pv === known) localStorage.removeItem(k);
         }
     };
 
@@ -896,6 +923,7 @@ rm -rf ${sq(DATA_DIR)}
             state.dataCache = preloaded;
             state.lastUpdated = preloaded.updatedAt || '';
             state.summary = preloaded.summary || null;
+            await refreshSyntheticHost();
             return;
         }
         try {
@@ -918,6 +946,7 @@ rm -rf ${sq(DATA_DIR)}
                     if (ufi?.client_ip) state._clientIp = ufi.client_ip;
                 } catch {}
             }
+            await refreshSyntheticHost();
         } catch (e) { console.warn('[HT] loadData:', e); }
     };
 
@@ -1215,7 +1244,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         const curPol = curPolicy.type || 'normal';
         const uMac = mac.toUpperCase();
         const pendingVal = localStorage.getItem(_pnKey(uMac));
-        const customName = (pendingVal !== null) ? (pendingVal || '') : ((state.dataCache?.devices?.[mac]?.customName || '').trim() || (state.policyMap?.[mac]?.name || ''));
+        const customName = (pendingVal !== null) ? (pendingVal || '') : ((state.dataCache?.devices?.[mac]?.customName || '').trim() || (state._custMap ? (state._custMap[uMac] || '') : ''));
         const masked = maskMac(mac);
         const content = `
       <div style="font-size:.72rem;color:#94a3b8;margin-bottom:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -1244,19 +1273,9 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
                 const newName = el.querySelector('#ht_dev_name')?.value?.trim() || '';
                 const type = el.querySelector('input[name="pol"]:checked')?.value;
                 let policyOk = true;
-                if (type === 'normal') {
-                    const r = await policyRemove(mac);
-                    if (!r?.success) policyOk = false;
-                } else if (type) {
-                    const _dev = state.dataCache?.devices?.[mac];
-                    const _snapName = newName || (_dev ? ((_dev.customName || '').trim() || (_dev.hostname || '').trim()) : '') || (displayName && displayName !== '未知设备' ? displayName : '');
-                    const r = await policySet(mac, type, _snapName);
-                    if (!r?.success) policyOk = false;
-                }
-                if (!policyOk) {
-                    createToast('策略保存失败，请稍后重试', 'red', 3000);
-                    return false;
-                }
+                if (type === 'normal') { const r = await policyRemove(mac); if (!r?.success) policyOk = false; }
+                else if (type === 'blacklist') { const r = await policySet(mac, 'blacklist'); if (!r?.success) policyOk = false; }
+                if (!policyOk) { createToast('策略保存失败，请稍后重试', 'red', 3000); return false; }
                 await loadPolicyMap();
                 setCustomName(mac, newName);
                 patchDataArea();
@@ -1467,7 +1486,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
         if (!area) return;
         area.innerHTML = renderReportArea();
         try {
-            const nameMap = rs.nameMap || await loadNameMap();
+            const nameMap = state._custMap || await loadNameMap();
             const dataResult = await loadReportData(rs.startDate, rs.endDate);
             const rawContent = (dataResult?.content || '').trim();
             if (rawContent && rawContent[0] !== '{' && rawContent[0] !== '[') {
@@ -1898,7 +1917,7 @@ ${summaryHtmls(m).map((html, i) => `<div class="ht-summary-item" data-ht="si_${i
         <div class="ht-card">
           <div class="ht-row" style="justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;">
             <div class="ht-row"><b>流量概览</b><span class="ht-date">${esc(dataDate)}<span data-ht="sum_date">${installed && updatedShort ? `（更新时间 ${esc(updatedShort)}）` : ''}</span></span></div>
-            <div class="ht-row" style="gap:4px;"><button id="ht_report_btn" data-newkey="report" class="ht-btn ht-btn-ghost${newCls('report')}" style="font-size:.56rem;padding:2px 8px;">用量报告</button><button id="ht_devices_toggle" data-newkey="devices" class="ht-btn ht-btn-ghost${newCls('devices')}" style="font-size:.56rem;padding:2px 8px;">${localStorage.getItem(LS_DEVICES_COLLAPSED) === '1' ? '设备明细 ▼' : '设备明细 ▲'}</button></div>
+            <div class="ht-row" style="gap:4px;"><button id="ht_report_btn" data-newkey="report" class="ht-btn ht-btn-ghost${newCls('report')}" style="font-size:.56rem;padding:2px 8px;">用量报告</button><button id="ht_devices_toggle" data-newkey="devices" class="ht-btn ht-btn-ghost${newCls('devices')}" style="font-size:.56rem;padding:2px 8px;">${localStorage.getItem(LS_DEVICES_COLLAPSED) === '1' ? '明细 ▼' : '明细 ▲'}</button></div>
           </div>
           ${summaryHtml}
         </div>
@@ -2126,7 +2145,7 @@ echo __RESULT__
                 if (!card) return;
                 const isCollapsed = card.style.display === 'none';
                 card.style.display = isCollapsed ? '' : 'none';
-                toggleBtn.textContent = isCollapsed ? '设备明细 ▲' : '设备明细 ▼';
+                toggleBtn.textContent = isCollapsed ? '明细 ▲' : '明细 ▼';
                 localStorage.setItem(LS_DEVICES_COLLAPSED, isCollapsed ? '0' : '1');
                 return;
             }

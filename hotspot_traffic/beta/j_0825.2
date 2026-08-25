@@ -324,6 +324,9 @@
 
     // ─── helpers ──────────────────────────────────────────────────────────────
     const _pnKey = (mac) => LS_KEY + 'pn_' + mac.toUpperCase();
+    const _synKey = (mac) => LS_KEY + 'syn_' + mac.toUpperCase();
+    const getSynthName = (mac) => { try { return localStorage.getItem(_synKey(mac)) || ''; } catch { return ''; } };
+    const setSynthName = (mac, name) => { try { const v = (name || '').trim(); if (!v || v === '未知设备') return; const k = _synKey(mac); if (localStorage.getItem(k) !== v) localStorage.setItem(k, v); } catch {} };
     const setCustomName = (mac, name) => {
         const uMac = mac.toUpperCase();
         const clean = (name || '').trim();
@@ -489,11 +492,12 @@
 
     const resolveDisplayName = (device) => {
         const uMac = (device.mac || '').toUpperCase();
+        const _fallback = device._synthetic ? getSynthName(uMac) : '';
         const pending = localStorage.getItem(_pnKey(uMac));
         if (pending !== null) {
-            return pending || (device.hostname || '').trim() || '未知设备';
+            return pending || (device.hostname || '').trim() || _fallback || '未知设备';
         }
-        return (device.customName || '').trim() || (device.hostname || '').trim() || '未知设备';
+        return (device.customName || '').trim() || (device.hostname || '').trim() || _fallback || '未知设备';
     };
 
     // ─── config read/write ────────────────────────────────────────────────────
@@ -988,6 +992,7 @@ rm -rf ${sq(DATA_DIR)}
 
     const _patchDeviceRow = (tr, device, index) => {
         const displayName = resolveDisplayName(device);
+        if (device._synthetic) setSynthName(device.mac, displayName);
         const txBytes = device.txBytes || 0;
         const rxBytes = device.rxBytes || 0;
         const totalBytes = txBytes + rxBytes;
@@ -1215,6 +1220,7 @@ if [ "$_mt" != ${sq(state._lastMtimeKey || '0')} ]; then timeout 2s awk '{print}
     // ─── render ───────────────────────────────────────────────────────────────
     const renderDeviceRow = (device, index) => {
         const displayName = resolveDisplayName(device);
+        if (device._synthetic) setSynthName(device.mac, displayName);
         const txBytes = device.txBytes || 0;
         const rxBytes = device.rxBytes || 0;
         const totalBytes = txBytes + rxBytes;
@@ -2170,7 +2176,7 @@ echo __RESULT__
                 const row = editBtn.closest('tr');
                 const nameEl = row?.querySelector('[data-ht="name"]');
                 const ipEl = row?.querySelector('[data-ht="ip"]');
-                const displayName = nameEl?.textContent?.replace(/\s*\(我\)$/, '') || '';
+                const displayName = (nameEl?.firstChild?.textContent || '').trim();
                 const ip = ipEl?.textContent || '';
                 showDeviceModal(mac, displayName, ip);
             }

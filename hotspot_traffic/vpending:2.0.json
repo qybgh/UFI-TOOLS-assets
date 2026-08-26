@@ -1,8 +1,8 @@
 {
-    "rev": "2.1.1",
-    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.1/g_0",
-    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/di_0",
+    "rev": "2.1.2",
+    "guard": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.2/g_0",
+    "diag": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.2/di_0",
     "deploy": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/de_0",
-    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.1/j_0",
-    "notes": "新增\n1.用量报告：面板内查看历史流量，自选日期区间（最长 60 天）\n2.每日流量趋势折线图，点击设备行可下钻单设备趋势\n3.已知设备与随机 MAC 分类，同名多 MAC 自动合并\n4.新功能徽标：首次可用的入口按钮右上角有红点提示\n优化\n1.修复跨天结算归档有几率导致前1日“系统增量”记录为0的问题\n2.其它若干细节优化\n\n提醒：2.0版本后台会默认保留近60天统计数据，前提是插件在此期间未被手动停用过"
+    "js": "https://cdn.jsdelivr.net/gh/qybgh/UFI-TOOLS-assets@refs/heads/main/hotspot_traffic/v2.0/v2.1.2/j_0",
+    "notes": "新增\n1.用量报告：面板内查看历史流量，自选日期区间（最长 60 天），每日流量趋势折线图，点击设备行可下钻单设备趋势，已知设备与随机 MAC 分类，同名多 MAC 自动合并\n2.新功能徽标：首次可用的入口按钮右上角有红点提示\n优化\n1.修复跨天结算归档有几率导致前1日“系统增量”记录为0的问题\n2.其它若干细节优化\n\n提醒：2.0版本后台会默认保留近60天统计数据，前提是插件在此期间未被手动停用过"
 }
